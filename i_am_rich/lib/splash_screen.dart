@@ -2,7 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'onboarding_screen.dart';
-import 'home_screen.dart';
+import 'main_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -36,7 +36,7 @@ class _SplashScreenState extends State<SplashScreen> {
     final isFirstLaunch = prefs.getBool('onboarding_complete') != true;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => isFirstLaunch ? const OnboardingScreen() : const HomeScreen(),
+        builder: (_) => isFirstLaunch ? const OnboardingScreen() : const MainScreen(),
       ),
     );
   }
