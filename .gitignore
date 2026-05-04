@@ -1,0 +1,74 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Flutter/Dart/Pub
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+**/build/
+**/coverage/
+**/.dart_tool/
+
+# Android
+**/.gradle/
+**/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+**/android/captures/
+**/GeneratedPluginRegistrant.java
+**/key.properties
+**/*.keystore
+**/*.jks
+
+# iOS
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/App.framework
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/ephemeral/
+**/ios/Flutter/flutter_export_environment.sh
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/ios/Flutter/.last_build_id
+**/*.pbxuser
+**/*.mode1v3
+**/*.mode2v3
+**/*.perspectivev3
+**/xcuserdata/
+**/DerivedData/
+**/*.moved-aside
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Environment / secrets
+.env
+.env.*
+*.env
+
+# Logs
+*.log
+
+# Misc
+*.class
+*.pyc
+*.swp
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+/.claude
