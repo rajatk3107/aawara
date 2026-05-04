@@ -425,6 +425,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ],
             ),
           ),
+          ), // Positioned.fill
 
           // Confetti burst
           Align(
