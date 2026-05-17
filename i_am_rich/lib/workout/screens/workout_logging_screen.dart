@@ -40,22 +40,21 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
       final ex = await _db.getExerciseById(exLog.exerciseId);
       if (ex != null) _exercises[exLog.id] = ex;
 
-      // Fetch previous performance
       final prev = await _db.getLastSetsForExercise(exLog.exerciseId);
       if (prev.isNotEmpty) {
         _hints[exLog.id] = prev
             .take(10)
-            .map((s) =>
-                s.weight != null && s.reps != null
-                    ? '${_fmtW(s.weight!)} × ${s.reps}'
-                    : null)
+            .map((s) => s.weight != null && s.reps != null
+                ? '${_fmtW(s.weight!)} × ${s.reps}'
+                : null)
             .toList();
       }
     }
     if (mounted) setState(() => _loading = false);
   }
 
-  String _fmtW(double w) => w == w.truncate() ? w.toInt().toString() : w.toString();
+  String _fmtW(double w) =>
+      w == w.truncate() ? w.toInt().toString() : w.toString();
 
   Future<void> _addSet(ExerciseLog exLog) async {
     const uuid = Uuid();
@@ -80,12 +79,41 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
     await _db.deleteSetLog(setLog.id);
     setState(() {
       exLog.sets.removeWhere((s) => s.id == setLog.id);
-      // Renumber
       for (int i = 0; i < exLog.sets.length; i++) {
         final s = exLog.sets[i];
         exLog.sets[i] = s.copyWith(setNumber: i + 1);
       }
     });
+  }
+
+  Future<void> _removeExercise(ExerciseLog exLog) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove Exercise',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Remove "${_exercises[exLog.id]?.name ?? 'this exercise'}" from the workout?',
+          style: const TextStyle(color: Colors.white60),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove', style: TextStyle(color: Color(0xFFE74C3C))),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await _db.deleteExerciseLog(exLog.id);
+      setState(() => _log.exercises.removeWhere((e) => e.id == exLog.id));
+    }
   }
 
   Future<void> _addExerciseToLog() async {
@@ -127,15 +155,21 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
     }
     final updated = _log.copyWith(completed: true);
     await _db.updateWorkoutLog(updated);
+    setState(() => _log = updated);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Workout completed! Great job!'),
+        content: Text('Workout completed! Great job! 💪'),
         backgroundColor: Color(0xFF2ECC71),
         behavior: SnackBarBehavior.floating,
       ),
     );
-    Navigator.pop(context);
+  }
+
+  Future<void> _undoComplete() async {
+    final updated = _log.copyWith(completed: false);
+    await _db.updateWorkoutLog(updated);
+    setState(() => _log = updated);
   }
 
   @override
@@ -145,15 +179,14 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
-      floatingActionButton: _log.completed
-          ? null
-          : FloatingActionButton(
-              onPressed: _addExerciseToLog,
-              backgroundColor: const Color(0xFF1A1A2E),
-              foregroundColor: const Color(0xFFFFD700),
-              mini: true,
-              child: const Icon(Icons.add),
-            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addExerciseToLog,
+        backgroundColor: const Color(0xFF1A1A2E),
+        foregroundColor: const Color(0xFFFFD700),
+        mini: true,
+        elevation: 2,
+        child: const Icon(Icons.add),
+      ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endTop,
       appBar: AppBar(
         backgroundColor: const Color(0xFF0D0D1A),
@@ -173,98 +206,153 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
           ],
         ),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          if (_log.completed)
+            TextButton(
+              onPressed: _undoComplete,
+              child: const Text('Undo',
+                  style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
+            ),
+        ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFFFD700)))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFFFD700)))
           : Column(
               children: [
                 // Stats bar
                 Container(
-                  color: const Color(0xFF1A1A2E),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  color: const Color(0xFF12121F),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
                       _QuickStat(
                           label: 'Exercises',
                           value: '${_log.exercises.length}'),
-                      _Divider(),
+                      _VSep(),
                       _QuickStat(label: 'Sets', value: '$totalSets'),
-                      _Divider(),
+                      _VSep(),
                       _QuickStat(
                           label: 'Volume',
                           value: totalVol > 0
                               ? '${totalVol.toStringAsFixed(0)} kg'
                               : '—'),
+                      if (_log.completed) ...[
+                        _VSep(),
+                        const _QuickStat(
+                            label: 'Status',
+                            value: '✓ Done',
+                            valueColor: Color(0xFF2ECC71)),
+                      ],
                     ],
                   ),
                 ),
                 Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-                    itemCount: _log.exercises.length,
-                    itemBuilder: (_, i) =>
-                        _ExerciseCard(
-                      key: ValueKey(_log.exercises[i].id),
-                      exLog: _log.exercises[i],
-                      exercise: _exercises[_log.exercises[i].id],
-                      prevHints: _hints[_log.exercises[i].id] ?? [],
-                      onAddSet: () => _addSet(_log.exercises[i]),
-                      onSetChanged: (s) =>
-                          _updateSet(_log.exercises[i], s),
-                      onSetDeleted: (s) =>
-                          _deleteSet(_log.exercises[i], s),
-                    ),
-                  ),
+                  child: _log.exercises.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.fitness_center_outlined,
+                                  color: Color(0xFF333355), size: 48),
+                              const SizedBox(height: 12),
+                              const Text('No exercises yet',
+                                  style: TextStyle(
+                                      color: Color(0xFF888899), fontSize: 14)),
+                              const SizedBox(height: 8),
+                              TextButton.icon(
+                                onPressed: _addExerciseToLog,
+                                icon: const Icon(Icons.add,
+                                    color: Color(0xFFFFD700)),
+                                label: const Text('Add Exercise',
+                                    style:
+                                        TextStyle(color: Color(0xFFFFD700))),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+                          itemCount: _log.exercises.length,
+                          itemBuilder: (_, i) => _ExerciseCard(
+                            key: ValueKey(_log.exercises[i].id),
+                            exLog: _log.exercises[i],
+                            exercise: _exercises[_log.exercises[i].id],
+                            prevHints: _hints[_log.exercises[i].id] ?? [],
+                            onAddSet: () => _addSet(_log.exercises[i]),
+                            onSetChanged: (s) =>
+                                _updateSet(_log.exercises[i], s),
+                            onSetDeleted: (s) =>
+                                _deleteSet(_log.exercises[i], s),
+                            onRemove: () => _removeExercise(_log.exercises[i]),
+                          ),
+                        ),
                 ),
               ],
             ),
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: GestureDetector(
-            onTap: _log.completed ? null : _completeWorkout,
-            child: Container(
-              height: 56,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _log.completed
-                      ? [const Color(0xFF2ECC71), const Color(0xFF27AE60)]
-                      : [const Color(0xFFFFD700), const Color(0xFFFFA500)],
-                ),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _log.completed ? Icons.check_circle : Icons.done_all,
-                      color: Colors.black,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _log.completed
-                          ? 'Workout Completed'
-                          : 'Complete Workout',
-                      style: const TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+          child: _log.completed
+              ? Container(
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2ECC71).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                        color: const Color(0xFF2ECC71).withValues(alpha: 0.3)),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.check_circle_rounded,
+                          color: Color(0xFF2ECC71), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Workout Completed',
+                        style: TextStyle(
+                          color: Color(0xFF2ECC71),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
                       ),
+                    ],
+                  ),
+                )
+              : GestureDetector(
+                  onTap: _completeWorkout,
+                  child: Container(
+                    height: 52,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFFFD700), Color(0xFFFFA500)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
                     ),
-                  ],
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.done_all_rounded, color: Colors.black),
+                        SizedBox(width: 8),
+                        Text(
+                          'Complete Workout',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          ),
         ),
       ),
     );
   }
 }
+
+// ─── Exercise Card ────────────────────────────────────────────────────────────
 
 class _ExerciseCard extends StatefulWidget {
   final ExerciseLog exLog;
@@ -273,6 +361,7 @@ class _ExerciseCard extends StatefulWidget {
   final VoidCallback onAddSet;
   final ValueChanged<SetLog> onSetChanged;
   final ValueChanged<SetLog> onSetDeleted;
+  final VoidCallback onRemove;
 
   const _ExerciseCard({
     super.key,
@@ -282,6 +371,7 @@ class _ExerciseCard extends StatefulWidget {
     required this.onAddSet,
     required this.onSetChanged,
     required this.onSetDeleted,
+    required this.onRemove,
   });
 
   @override
@@ -295,10 +385,10 @@ class _ExerciseCardState extends State<_ExerciseCard> {
   Widget build(BuildContext context) {
     final ex = widget.exercise;
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFF12121F),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
         children: [
@@ -306,7 +396,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
           GestureDetector(
             onTap: () => setState(() => _expanded = !_expanded),
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
               child: Row(
                 children: [
                   if (ex != null)
@@ -315,40 +405,45 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     const Text('Unknown Exercise',
                         style: TextStyle(color: Colors.white)),
                   const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline,
+                        color: Colors.white24, size: 18),
+                    onPressed: widget.onRemove,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  ),
                   Icon(
                     _expanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    color: const Color(0xFF888899),
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    color: const Color(0xFF444466),
+                    size: 20,
                   ),
                 ],
               ),
             ),
           ),
           if (_expanded) ...[
-            const Divider(color: Color(0xFF333355), height: 1),
-            // Previous hint
+            const Divider(color: Color(0xFF1E1E35), height: 1),
             if (widget.prevHints.isNotEmpty)
               Padding(
-                padding:
-                    const EdgeInsets.fromLTRB(16, 10, 16, 2),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
                 child: Row(
                   children: [
-                    const Icon(Icons.history,
-                        color: Color(0xFF888899), size: 14),
+                    const Icon(Icons.history_rounded,
+                        color: Color(0xFF444466), size: 13),
                     const SizedBox(width: 6),
                     Text(
                       'Last: ${widget.prevHints.first ?? '—'}',
                       style: const TextStyle(
-                          color: Color(0xFF888899), fontSize: 12),
+                          color: Color(0xFF555577), fontSize: 12),
                     ),
                   ],
                 ),
               ),
-            // Set header
             if (widget.exLog.sets.isNotEmpty)
               const Padding(
-                padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Row(
                   children: [
                     SizedBox(
@@ -356,7 +451,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: Text('SET',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                                color: Color(0xFF888899),
+                                color: Color(0xFF444466),
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                                 letterSpacing: 1))),
@@ -365,7 +460,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: Text('WEIGHT',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                                color: Color(0xFF888899),
+                                color: Color(0xFF444466),
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                                 letterSpacing: 1))),
@@ -376,7 +471,7 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                         child: Text('REPS',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                                color: Color(0xFF888899),
+                                color: Color(0xFF444466),
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                                 letterSpacing: 1))),
@@ -384,7 +479,6 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                   ],
                 ),
               ),
-            // Sets
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
               child: Column(
@@ -405,31 +499,29 @@ class _ExerciseCardState extends State<_ExerciseCard> {
                     .toList(),
               ),
             ),
-            // Add set button
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
               child: GestureDetector(
                 onTap: widget.onAddSet,
                 child: Container(
-                  height: 40,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFD700).withOpacity(0.08),
+                    color: const Color(0xFFFFD700).withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                        color: const Color(0xFFFFD700).withOpacity(0.3)),
+                        color: const Color(0xFFFFD700).withValues(alpha: 0.2)),
                   ),
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.add,
-                          color: Color(0xFFFFD700), size: 16),
+                      Icon(Icons.add, color: Color(0xFFFFD700), size: 14),
                       SizedBox(width: 6),
                       Text(
                         'Add Set',
                         style: TextStyle(
                             color: Color(0xFFFFD700),
                             fontWeight: FontWeight.w600,
-                            fontSize: 13),
+                            fontSize: 12),
                       ),
                     ],
                   ),
@@ -446,33 +538,33 @@ class _ExerciseCardState extends State<_ExerciseCard> {
 class _QuickStat extends StatelessWidget {
   final String label;
   final String value;
-  const _QuickStat({required this.label, required this.value});
+  final Color? valueColor;
+  const _QuickStat({required this.label, required this.value, this.valueColor});
 
   @override
   Widget build(BuildContext context) => Column(
         children: [
           Text(value,
-              style: const TextStyle(
-                  color: Color(0xFFFFD700),
+              style: TextStyle(
+                  color: valueColor ?? const Color(0xFFFFD700),
                   fontWeight: FontWeight.bold,
-                  fontSize: 18)),
+                  fontSize: 16)),
           Text(label,
-              style:
-                  const TextStyle(color: Color(0xFF888899), fontSize: 11)),
+              style: const TextStyle(color: Color(0xFF555577), fontSize: 11)),
         ],
       );
 }
 
-class _Divider extends StatelessWidget {
+class _VSep extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: 1,
-        height: 28,
-        color: const Color(0xFF333355),
+        height: 24,
+        color: const Color(0xFF1E1E35),
       );
 }
 
-// ─── INLINE EXERCISE PICKER ──────────────────────────────────────────────────
+// ─── Inline Exercise Picker ───────────────────────────────────────────────────
 
 class _InlineExercisePicker extends StatefulWidget {
   const _InlineExercisePicker();
@@ -503,7 +595,12 @@ class _InlineExercisePickerState extends State<_InlineExercisePicker> {
 
   Future<void> _load() async {
     final all = await _db.getAllExercises();
-    if (mounted) setState(() { _all = all; _filter(); });
+    if (mounted) {
+      setState(() {
+        _all = all;
+        _filter();
+      });
+    }
   }
 
   void _filter() {
@@ -537,8 +634,9 @@ class _InlineExercisePickerState extends State<_InlineExercisePicker> {
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 hintText: 'Search exercises…',
-                hintStyle: const TextStyle(color: Color(0xFF555566)),
-                prefixIcon: const Icon(Icons.search, color: Color(0xFF888899)),
+                hintStyle: const TextStyle(color: Color(0xFF444466)),
+                prefixIcon:
+                    const Icon(Icons.search, color: Color(0xFF888899)),
                 filled: true,
                 fillColor: const Color(0xFF1A1A2E),
                 border: OutlineInputBorder(
@@ -555,7 +653,10 @@ class _InlineExercisePickerState extends State<_InlineExercisePicker> {
         children: [
           MuscleGroupFilter(
               selected: _group,
-              onChanged: (g) => setState(() { _group = g; _filter(); })),
+              onChanged: (g) => setState(() {
+                    _group = g;
+                    _filter();
+                  })),
           const SizedBox(height: 8),
           Expanded(
             child: ListView.separated(

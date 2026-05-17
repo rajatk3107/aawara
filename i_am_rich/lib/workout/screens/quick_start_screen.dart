@@ -71,8 +71,16 @@ const _kMuscleGroups = <String, List<String>>{
 
 class QuickStartScreen extends StatefulWidget {
   final String targetDate;
+  // When provided, skip step 1 and go straight to the exercise editor
+  final String? preloadedName;
+  final List<Exercise>? preloadedExercises;
 
-  const QuickStartScreen({super.key, required this.targetDate});
+  const QuickStartScreen({
+    super.key,
+    required this.targetDate,
+    this.preloadedName,
+    this.preloadedExercises,
+  });
 
   @override
   State<QuickStartScreen> createState() => _QuickStartScreenState();
@@ -81,10 +89,24 @@ class QuickStartScreen extends StatefulWidget {
 class _QuickStartScreenState extends State<QuickStartScreen> {
   final _db = WorkoutDatabase.instance;
 
-  int _step = 1;
-  String _workoutName = '';
-  List<Exercise> _exercises = [];
+  late int _step;
+  late String _workoutName;
+  late List<Exercise> _exercises;
   bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.preloadedExercises != null) {
+      _step = 2;
+      _workoutName = widget.preloadedName ?? 'Workout';
+      _exercises = List.from(widget.preloadedExercises!);
+    } else {
+      _step = 1;
+      _workoutName = '';
+      _exercises = [];
+    }
+  }
 
   Future<void> _pickPreset(String name, List<String> exerciseNames) async {
     setState(() => _loading = true);
@@ -166,10 +188,17 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
         leading: _step == 2
             ? IconButton(
                 icon: const Icon(Icons.arrow_back),
-                onPressed: () => setState(() {
-                  _step = 1;
-                  _exercises = [];
-                }),
+                onPressed: () {
+                  // If started at step 2 (preloaded), back = pop screen
+                  if (widget.preloadedExercises != null) {
+                    Navigator.pop(context);
+                  } else {
+                    setState(() {
+                      _step = 1;
+                      _exercises = [];
+                    });
+                  }
+                },
               )
             : null,
         title: Text(

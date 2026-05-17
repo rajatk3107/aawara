@@ -23,7 +23,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -31,6 +31,18 @@ class WorkoutDatabase {
 
   Future<void> _upgradeDB(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) await _addMissingExercises(db);
+    if (oldVersion < 3) await _addBodyWeightTable(db);
+  }
+
+  Future<void> _addBodyWeightTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS body_weight_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL,
+        weight_kg REAL NOT NULL,
+        notes TEXT
+      )
+    ''');
   }
 
   Future<void> _addMissingExercises(Database db) async {
@@ -136,6 +148,15 @@ class WorkoutDatabase {
         set_number INTEGER NOT NULL,
         weight REAL,
         reps INTEGER,
+        notes TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE body_weight_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL,
+        weight_kg REAL NOT NULL,
         notes TEXT
       )
     ''');
@@ -445,6 +466,18 @@ class WorkoutDatabase {
         where: 'id = ?', whereArgs: [log.id]);
   }
 
+  Future<void> deleteWorkoutLog(String id) async {
+    final db = await database;
+    final exLogs = await db.query('exercise_logs',
+        where: 'workout_log_id = ?', whereArgs: [id], columns: ['id']);
+    for (final e in exLogs) {
+      await db.delete('set_logs',
+          where: 'exercise_log_id = ?', whereArgs: [e['id']]);
+    }
+    await db.delete('exercise_logs', where: 'workout_log_id = ?', whereArgs: [id]);
+    await db.delete('workout_logs', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<ExerciseLog> createExerciseLog(ExerciseLog exLog) async {
     final db = await database;
     await db.insert('exercise_logs', exLog.toMap());
@@ -592,6 +625,45 @@ class WorkoutDatabase {
       [_fmt(weekStart)],
     ));
     return count ?? 0;
+  }
+
+  // ─── BODY WEIGHT ────────────────────────────────────────────────────────────
+
+  Future<void> logBodyWeight(String date, double weightKg, {String? notes}) async {
+    const uuid = Uuid();
+    final db = await database;
+    final existing = await db.query('body_weight_logs', where: 'date = ?', whereArgs: [date]);
+    if (existing.isNotEmpty) {
+      await db.update('body_weight_logs', {'weight_kg': weightKg, 'notes': notes},
+          where: 'date = ?', whereArgs: [date]);
+    } else {
+      await db.insert('body_weight_logs', {
+        'id': uuid.v4(),
+        'date': date,
+        'weight_kg': weightKg,
+        'notes': notes,
+      });
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getBodyWeightLogs(
+      {String? fromDate, String? toDate}) async {
+    final db = await database;
+    final where = StringBuffer('1=1');
+    final args = <dynamic>[];
+    if (fromDate != null) { where.write(' AND date >= ?'); args.add(fromDate); }
+    if (toDate != null) { where.write(' AND date <= ?'); args.add(toDate); }
+    return db.rawQuery(
+        'SELECT date, weight_kg FROM body_weight_logs WHERE ${where.toString()} ORDER BY date ASC',
+        args);
+  }
+
+  Future<double?> getLatestBodyWeight() async {
+    final db = await database;
+    final rows = await db.query('body_weight_logs',
+        orderBy: 'date DESC', limit: 1, columns: ['weight_kg']);
+    if (rows.isEmpty) return null;
+    return (rows.first['weight_kg'] as num).toDouble();
   }
 
   String _fmt(DateTime d) =>
