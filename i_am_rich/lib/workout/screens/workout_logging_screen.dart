@@ -7,6 +7,7 @@ import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
+import 'workout_complete_screen.dart';
 
 class WorkoutLoggingScreen extends StatefulWidget {
   final WorkoutLog workoutLog;
@@ -252,11 +253,17 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
     await _db.updateWorkoutLog(updated);
     setState(() => _log = updated);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Workout completed! Great job!'),
-      backgroundColor: Color(0xFF2ECC71),
-      behavior: SnackBarBehavior.floating,
-    ));
+    _durationTimer?.cancel();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WorkoutCompleteScreen(
+          log: _log,
+          exercises: _exercises,
+          elapsedSeconds: _elapsedSeconds,
+        ),
+      ),
+    );
   }
 
   Future<void> _undoComplete() async {
