@@ -705,6 +705,28 @@ class WorkoutDatabase {
     return count ?? 0;
   }
 
+  Future<int> getMonthlyWorkoutCount() async {
+    final db = await database;
+    final now = DateTime.now();
+    final from = '${now.year}-${now.month.toString().padLeft(2, '0')}-01';
+    final count = Sqflite.firstIntValue(await db.rawQuery(
+      'SELECT COUNT(*) FROM workout_logs WHERE completed = 1 AND date >= ?',
+      [from],
+    ));
+    return count ?? 0;
+  }
+
+  Future<Set<String>> getCompletedWorkoutDatesInRange(String fromDate, String toDate) async {
+    final db = await database;
+    final rows = await db.query(
+      'workout_logs',
+      columns: ['date'],
+      where: 'completed = 1 AND date >= ? AND date <= ?',
+      whereArgs: [fromDate, toDate],
+    );
+    return rows.map((r) => r['date'] as String).toSet();
+  }
+
   // ─── BODY WEIGHT ────────────────────────────────────────────────────────────
 
   Future<void> logBodyWeight(String date, double weightKg, {String? notes}) async {

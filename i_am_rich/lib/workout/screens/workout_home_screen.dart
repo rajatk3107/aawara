@@ -26,9 +26,17 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   WorkoutPlanDay? _dayPlan;
   WorkoutLog? _dayLog;
   List<Exercise> _dayExercises = [];
+
+  // Stats
   int _streak = 0;
   int _weeklyCount = 0;
+  int _monthlyCount = 0;
   double? _latestWeight;
+
+  // Week strip
+  Map<int, WorkoutPlanDay?> _weekPlanDays = {};
+  Set<String> _weekCompletedDates = {};
+
   bool _loading = true;
 
   String get _dateStr {
@@ -46,7 +54,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   bool get _isFuture {
     final now = DateTime.now();
     final todayMidnight = DateTime(now.year, now.month, now.day);
-    final selMidnight = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    final selMidnight = DateTime(
+        _selectedDate.year, _selectedDate.month, _selectedDate.day);
     return selMidnight.isAfter(todayMidnight);
   }
 
@@ -59,11 +68,39 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final planDay = await _db.getPlanDayForWeekday(_selectedDate.weekday);
-      final log = await _db.getWorkoutLogForDate(_dateStr);
-      final streak = await _db.getWorkoutStreak();
-      final weekly = await _db.getWeeklyWorkoutCount();
-      final weight = await _db.getLatestBodyWeight();
+      final now = DateTime.now();
+      final weekMonday = now.subtract(Duration(days: now.weekday - 1));
+      final weekSunday = weekMonday.add(const Duration(days: 6));
+      final weekFrom = _fmt(weekMonday);
+      final weekTo = _fmt(weekSunday);
+
+      final results = await Future.wait([
+        _db.getPlanDayForWeekday(_selectedDate.weekday),
+        _db.getWorkoutLogForDate(_dateStr),
+        _db.getWorkoutStreak(),
+        _db.getWeeklyWorkoutCount(),
+        _db.getMonthlyWorkoutCount(),
+        _db.getLatestBodyWeight(),
+        _db.getWorkoutPlan(),
+        _db.getCompletedWorkoutDatesInRange(weekFrom, weekTo),
+      ]);
+
+      final planDay = results[0] as WorkoutPlanDay?;
+      final log = results[1] as WorkoutLog?;
+      final streak = results[2] as int;
+      final weekly = results[3] as int;
+      final monthly = results[4] as int;
+      final weight = results[5] as double?;
+      final allPlanDays = results[6] as List<WorkoutPlanDay>;
+      final completedDates = results[7] as Set<String>;
+
+      final weekMap = <int, WorkoutPlanDay?>{};
+      for (int i = 1; i <= 7; i++) {
+        weekMap[i] = null;
+      }
+      for (final d in allPlanDays) {
+        weekMap[d.dayOfWeek] = d;
+      }
 
       List<Exercise> exercises = [];
       if (planDay != null && !planDay.isRestDay) {
@@ -82,7 +119,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _dayExercises = exercises;
           _streak = streak;
           _weeklyCount = weekly;
+          _monthlyCount = monthly;
           _latestWeight = weight;
+          _weekPlanDays = weekMap;
+          _weekCompletedDates = completedDates;
           _loading = false;
         });
       }
@@ -91,42 +131,31 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     }
   }
 
-  void _prevDay() {
-    setState(() => _selectedDate = _selectedDate.subtract(const Duration(days: 1)));
-    _load();
+  Future<void> _loadForDate() async {
+    try {
+      final planDay = await _db.getPlanDayForWeekday(_selectedDate.weekday);
+      final log = await _db.getWorkoutLogForDate(_dateStr);
+
+      List<Exercise> exercises = [];
+      if (planDay != null && !planDay.isRestDay) {
+        final override = await _db.getDayOverride(_dateStr);
+        final ids = override ?? planDay.exerciseIds;
+        for (final id in ids) {
+          final ex = await _db.getExerciseById(id);
+          if (ex != null) exercises.add(ex);
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _dayPlan = planDay;
+          _dayLog = log;
+          _dayExercises = exercises;
+        });
+      }
+    } catch (_) {}
   }
 
-  void _nextDay() {
-    if (_isToday) return;
-    setState(() => _selectedDate = _selectedDate.add(const Duration(days: 1)));
-    _load();
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now().add(const Duration(days: 365)),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.dark(
-            primary: Color(0xFFFFD700),
-            onPrimary: Colors.black,
-            surface: Color(0xFF1A1A2E),
-            onSurface: Colors.white,
-          ),
-        ),
-        child: child!,
-      ),
-    );
-    if (picked != null) {
-      setState(() => _selectedDate = picked);
-      _load();
-    }
-  }
-
-  /// Opens pre-workout setup: plan exercises pre-loaded, user can edit before starting.
   Future<void> _logWorkout() async {
     if (_dayExercises.isNotEmpty) {
       await Navigator.push(
@@ -152,7 +181,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     if (_dayLog == null) return;
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => WorkoutLoggingScreen(workoutLog: _dayLog!)),
+      MaterialPageRoute(
+          builder: (_) => WorkoutLoggingScreen(workoutLog: _dayLog!)),
     );
     _load();
   }
@@ -167,16 +197,20 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         backgroundColor: const Color(0xFF1A1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Log Weight',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style:
+                TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: Row(
           children: [
             Expanded(
               child: TextField(
                 controller: controller,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
                 autofocus: true,
                 style: const TextStyle(
-                    color: Color(0xFFFFD700), fontSize: 28, fontWeight: FontWeight.bold),
+                    color: Color(0xFFFFD700),
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold),
                 decoration: const InputDecoration(
                   border: InputBorder.none,
                   hintText: '0.0',
@@ -191,7 +225,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -201,9 +236,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),
               foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
-            child: const Text('Save', style: TextStyle(fontWeight: FontWeight.bold)),
+            child:
+                const Text('Save', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -222,7 +259,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     _load();
   }
 
-  /// Shows a bottom sheet with options to edit or clear the day's workout.
   void _showDayOptions() {
     final hasLog = _dayLog != null;
     final isRest = _dayPlan?.isRestDay ?? false;
@@ -255,22 +291,24 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             Text(
               DateFormat('EEEE, MMM d').format(_selectedDate),
               style: const TextStyle(
-                  color: Colors.white38, fontSize: 13, fontWeight: FontWeight.w500),
+                  color: Colors.white38,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500),
             ),
             const SizedBox(height: 4),
             const Text(
               'Day Options',
               style: TextStyle(
-                  color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 20),
-
-            // Clear logged workout
             if (hasLog)
               _OptionTile(
                 icon: Icons.delete_sweep_outlined,
                 label: 'Clear Workout Log',
-                subtitle: 'Remove all logged sets and exercises for this day',
+                subtitle: 'Remove all logged sets for this day',
                 color: const Color(0xFFE74C3C),
                 onTap: () async {
                   Navigator.pop(context);
@@ -286,8 +324,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   }
                 },
               ),
-
-            // Mark as rest / un-rest
             if (_dayPlan != null)
               _OptionTile(
                 icon: isRest
@@ -303,7 +339,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 onTap: () async {
                   Navigator.pop(context);
                   if (!isRest && hasLog) {
-                    // Confirm clearing log when switching to rest
                     final confirm = await _confirmDialog(
                       'Mark as Rest Day?',
                       'This will also delete the workout log for this day.',
@@ -316,8 +351,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   _toggleRestDay();
                 },
               ),
-
-            // Edit weekly plan
             _OptionTile(
               icon: Icons.edit_calendar_outlined,
               label: 'Edit Weekly Plan',
@@ -326,7 +359,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
               onTap: () async {
                 Navigator.pop(context);
                 await Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const WorkoutPlanScreen()));
+                    MaterialPageRoute(
+                        builder: (_) => const WorkoutPlanScreen()));
                 _load();
               },
             ),
@@ -344,13 +378,15 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         backgroundColor: const Color(0xFF1A1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(title,
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style: const TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold)),
         content: Text(body,
             style: const TextStyle(color: Colors.white54, fontSize: 14)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
@@ -368,12 +404,16 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     );
   }
 
+  String _fmt(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFFFD700)))
+          ? const Center(
+              child: CircularProgressIndicator(color: Color(0xFFFFD700)))
           : SafeArea(
               child: RefreshIndicator(
                 color: const Color(0xFFFFD700),
@@ -381,14 +421,27 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 onRefresh: _load,
                 child: CustomScrollView(
                   slivers: [
-                    SliverToBoxAdapter(child: _buildDateNav()),
-                    SliverToBoxAdapter(child: const SizedBox(height: 16)),
-                    SliverToBoxAdapter(child: _buildWorkoutCard()),
-                    SliverToBoxAdapter(child: const SizedBox(height: 16)),
-                    SliverToBoxAdapter(child: _buildStatsRow()),
-                    SliverToBoxAdapter(child: const SizedBox(height: 24)),
-                    SliverToBoxAdapter(child: _buildQuickAccess()),
-                    SliverToBoxAdapter(child: const SizedBox(height: 32)),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(0, 4, 0, 0),
+                            child: _buildHeader())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                            child: _buildWeekStrip())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                            child: _buildWorkoutCard())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                            child: _buildStatsStrip())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+                            child: _buildQuickAccess())),
+                    const SliverToBoxAdapter(child: SizedBox(height: 32)),
                   ],
                 ),
               ),
@@ -396,56 +449,248 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     );
   }
 
-  // ─── Date Navigator ───────────────────────────────────────────────────────
+  // ─── Header ──────────────────────────────────────────────────────────────────
 
-  Widget _buildDateNav() {
-    final label = _isToday ? 'Today' : DateFormat('EEEE').format(_selectedDate);
-    final sub = DateFormat('MMM d, yyyy').format(_selectedDate);
+  Widget _buildHeader() {
+    final now = DateTime.now();
+    final hour = now.hour;
+    String greeting;
+    if (hour < 12) {
+      greeting = 'Good morning!';
+    } else if (hour < 17) {
+      greeting = 'Ready to train?';
+    } else {
+      greeting = 'Evening session?';
+    }
+    final dayName = DateFormat('EEEE').format(now);
+    final dateLabel = DateFormat('MMM d').format(now);
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          _CircleBtn(icon: Icons.chevron_left, onTap: _prevDay),
           Expanded(
-            child: GestureDetector(
-              onTap: _pickDate,
-              child: Column(
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: _isToday
-                          ? const Color(0xFFFFD700)
-                          : _isFuture
-                              ? const Color(0xFF3498DB)
-                              : Colors.white,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$dayName · $dateLabel',
+                  style: const TextStyle(
+                      color: Color(0xFF555577),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  greeting,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
                       fontWeight: FontWeight.bold,
-                      fontSize: 20,
-                    ),
-                  ),
-                  Text(sub,
-                      style: const TextStyle(color: Colors.white38, fontSize: 12)),
-                ],
-              ),
+                      letterSpacing: -0.3),
+                ),
+              ],
             ),
           ),
-          _CircleBtn(
-            icon: Icons.chevron_right,
-            onTap: _isToday ? null : _nextDay,
-            disabled: _isToday,
-          ),
-          const SizedBox(width: 4),
-          _CircleBtn(
-            icon: Icons.edit_note_rounded,
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const NotesListScreen())),
+          Row(
+            children: [
+              GestureDetector(
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const NotesListScreen())),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A2E),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFF1E1E35)),
+                  ),
+                  child: const Icon(Icons.edit_note_rounded,
+                      color: Colors.white54, size: 20),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                width: 40,
+                height: 40,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFFFFD700), Color(0xFFB8860B)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: const Center(
+                  child: Text(
+                    'A',
+                    style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // ─── Main Workout Card ────────────────────────────────────────────────────
+  // ─── Week Plan Strip ─────────────────────────────────────────────────────────
+
+  Widget _buildWeekStrip() {
+    final now = DateTime.now();
+    final weekMonday = now.subtract(Duration(days: now.weekday - 1));
+    final dayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'THIS WEEK',
+                style: const TextStyle(
+                    color: Color(0xFF555577),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8),
+              ),
+              Text(
+                '$_weeklyCount / 7',
+                style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(7, (i) {
+              final weekday = i + 1;
+              final dayDate = weekMonday.add(Duration(days: i));
+              final dateStr = _fmt(dayDate);
+              final planDay = _weekPlanDays[weekday];
+              final isRest = planDay?.isRestDay ?? false;
+              final isDone = _weekCompletedDates.contains(dateStr);
+              final isToday = weekday == now.weekday;
+              final isSelected = weekday == _selectedDate.weekday &&
+                  _selectedDate.year == dayDate.year &&
+                  _selectedDate.month == dayDate.month &&
+                  _selectedDate.day == dayDate.day;
+              final isFuture = dayDate.isAfter(DateTime(now.year, now.month, now.day));
+
+              // Short label from workout name
+              String label;
+              if (planDay == null) {
+                label = '—';
+              } else if (isRest) {
+                label = 'Rest';
+              } else {
+                final words = planDay.workoutName.split(' ');
+                label = words.isNotEmpty ? words[0] : '—';
+                if (label.length > 4) label = label.substring(0, 4);
+              }
+
+              Color dotColor;
+              if (isDone) {
+                dotColor = const Color(0xFF2ECC71);
+              } else if (isToday) {
+                dotColor = const Color(0xFFFFD700);
+              } else if (isFuture) {
+                dotColor = const Color(0xFF2A2A45);
+              } else {
+                dotColor = const Color(0xFF3A3A55);
+              }
+
+              return Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() => _selectedDate = dayDate);
+                    _loadForDate();
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: EdgeInsets.only(right: i < 6 ? 4 : 0),
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? const Color(0xFFFFD700).withValues(alpha: 0.08)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isSelected
+                            ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                            : Colors.transparent,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          dayLetters[i],
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: isSelected || isToday
+                                ? const Color(0xFFFFD700)
+                                : const Color(0xFF555577),
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 8,
+                            fontWeight: FontWeight.w600,
+                            color: isDone
+                                ? const Color(0xFF2ECC71)
+                                : isSelected || isToday
+                                    ? const Color(0xFFFFD700)
+                                    : isRest
+                                        ? const Color(0xFF3A3A55)
+                                        : isFuture
+                                            ? const Color(0xFF444466)
+                                            : const Color(0xFF666688),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 5),
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: dotColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Workout Card ─────────────────────────────────────────────────────────────
 
   Widget _buildWorkoutCard() {
     final isRest = _dayPlan?.isRestDay ?? false;
@@ -454,606 +699,498 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     final isInProgress = _dayLog != null && !isCompleted;
 
     Color accentColor;
-    IconData statusIcon;
+    String badge;
     String title;
-    String subtitle;
 
     if (isCompleted) {
       accentColor = const Color(0xFF2ECC71);
-      statusIcon = Icons.check_circle_rounded;
+      badge = 'DONE';
       title = _dayLog!.workoutName;
-      subtitle = '${_dayLog!.totalSets} sets · ${_dayLog!.totalVolume.toStringAsFixed(0)} kg volume';
     } else if (isInProgress) {
       accentColor = const Color(0xFFF39C12);
-      statusIcon = Icons.play_circle_fill_rounded;
+      badge = 'IN PROGRESS';
       title = _dayLog!.workoutName;
-      subtitle = 'In progress · ${_dayLog!.totalSets} sets logged';
     } else if (isRest) {
       accentColor = const Color(0xFF3498DB);
-      statusIcon = Icons.self_improvement_rounded;
-      title = 'Rest Day';
-      subtitle = 'Recovery is part of the progress';
+      badge = 'REST DAY';
+      title = 'Recover & Recharge';
     } else if (noPlan) {
       accentColor = const Color(0xFF888899);
-      statusIcon = Icons.add_circle_outline_rounded;
+      badge = _isFuture ? 'UPCOMING' : 'NO PLAN';
       title = 'No Workout Planned';
-      subtitle = 'Use Quick Start or set up your weekly plan';
     } else {
       accentColor = const Color(0xFFFFD700);
-      statusIcon = Icons.fitness_center_rounded;
+      final dayLabel = _isToday ? 'TODAY' : DateFormat('EEE').format(_selectedDate).toUpperCase();
+      badge = '$dayLabel · ${(_dayPlan!.workoutName.split(' ').take(2).join(' ')).toUpperCase()}';
       title = _dayPlan!.workoutName;
-      subtitle = '${_dayExercises.length} exercises planned';
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Container(
-        decoration: BoxDecoration(
-          color: const Color(0xFF12121F),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: accentColor.withValues(alpha: isCompleted ? 0.35 : 0.15),
-            width: 1.5,
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF12121F),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accentColor.withValues(alpha: 0.2), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Badge chip
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: accentColor,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Text(
+                          badge,
+                          style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        title,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: -0.3),
+                      ),
+                      if (!isRest && !noPlan && !isCompleted && !isInProgress)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${_dayExercises.length} exercises',
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 12),
+                              ),
+                              const Text(
+                                '  ·  ',
+                                style: TextStyle(
+                                    color: Color(0xFF444466), fontSize: 12),
+                              ),
+                              Text(
+                                '~${(_dayExercises.length * 7).clamp(20, 120)} min',
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (isCompleted)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${_dayLog!.exercises.length} exercises',
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 12),
+                              ),
+                              const Text('  ·  ',
+                                  style: TextStyle(
+                                      color: Color(0xFF444466), fontSize: 12)),
+                              Text(
+                                '${_dayLog!.totalSets} sets',
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 12),
+                              ),
+                              const Text('  ·  ',
+                                  style: TextStyle(
+                                      color: Color(0xFF444466), fontSize: 12)),
+                              Text(
+                                '${_dayLog!.totalVolume.toStringAsFixed(0)} kg',
+                                style: const TextStyle(
+                                    color: Color(0xFFFFD700), fontSize: 12,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  children: [
+                    if (!isRest && !noPlan && !isCompleted && !isInProgress)
+                      _PillButton(
+                        label: _isFuture ? 'Plan' : 'Start',
+                        icon: Icons.play_arrow_rounded,
+                        color: accentColor,
+                        onTap: _logWorkout,
+                      ),
+                    if (isCompleted)
+                      _PillButton(
+                        label: 'View',
+                        icon: Icons.visibility_outlined,
+                        color: accentColor,
+                        onTap: _openLog,
+                      ),
+                    if (isInProgress)
+                      _PillButton(
+                        label: 'Resume',
+                        icon: Icons.play_arrow_rounded,
+                        color: accentColor,
+                        onTap: _openLog,
+                      ),
+                    if (isRest || noPlan)
+                      _PillButton(
+                        label: 'Train',
+                        icon: Icons.fitness_center_rounded,
+                        color: const Color(0xFFFFD700),
+                        onTap: () async {
+                          await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) =>
+                                      QuickStartScreen(targetDate: _dateStr)));
+                          _load();
+                        },
+                      ),
+                    const SizedBox(height: 6),
+                    GestureDetector(
+                      onTap: _showDayOptions,
+                      child: Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1A1A2E),
+                          borderRadius: BorderRadius.circular(10),
+                          border:
+                              Border.all(color: const Color(0xFF2A2A45)),
+                        ),
+                        child: const Icon(Icons.more_horiz_rounded,
+                            color: Colors.white38, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Card header
+
+          // Exercise list (planned workout only)
+          if (!isRest && !noPlan && !isCompleted && !isInProgress &&
+              _dayExercises.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Divider(color: Color(0xFF1E1E35), height: 1),
+            ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+              child: Column(
                 children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: accentColor.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(14),
+                  ..._dayExercises.take(4).toList().asMap().entries.map((e) {
+                    final i = e.key;
+                    final ex = e.value;
+                    return Padding(
+                      padding: EdgeInsets.only(
+                          bottom: i < (_dayExercises.length.clamp(1, 4) - 1)
+                              ? 0
+                              : 0),
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 7),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 22,
+                                  height: 22,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF1E1E35),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      '${i + 1}',
+                                      style: const TextStyle(
+                                          color: Color(0xFF555577),
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    ex.name,
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500),
+                                  ),
+                                ),
+                                Text(
+                                  ex.muscleGroup,
+                                  style: const TextStyle(
+                                      color: Color(0xFF444466),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (i < (_dayExercises.take(4).length - 1))
+                            const Divider(
+                                color: Color(0xFF1A1A2E), height: 1),
+                        ],
+                      ),
+                    );
+                  }),
+                  if (_dayExercises.length > 4)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, bottom: 2),
+                      child: Text(
+                        '+ ${_dayExercises.length - 4} more exercises',
+                        style: const TextStyle(
+                            color: Color(0xFFFFD700),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600),
+                      ),
                     ),
-                    child: Icon(statusIcon, color: accentColor, size: 24),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 2),
-                        Text(subtitle,
-                            style: const TextStyle(
-                                color: Colors.white38, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                  if (_isFuture)
-                    _Badge(label: 'Upcoming', color: const Color(0xFF3498DB)),
-                  IconButton(
-                    onPressed: _showDayOptions,
-                    icon: const Icon(Icons.more_vert_rounded,
-                        color: Colors.white24, size: 20),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                  ),
                 ],
               ),
             ),
-
-            // Exercise preview (for planned workout days)
-            if (!isRest && !noPlan && !isCompleted && !isInProgress && _dayExercises.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 18),
-                child: Divider(color: Color(0xFF1E1E35), height: 1),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 18, 4),
-                child: Column(
-                  children: _dayExercises.take(4).map((ex) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: BoxDecoration(
-                            color: accentColor.withValues(alpha: 0.6),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(ex.name,
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13)),
-                        const Spacer(),
-                        Text(ex.muscleGroup,
-                            style: const TextStyle(
-                                color: Colors.white24, fontSize: 11)),
-                      ],
-                    ),
-                  )).toList(),
-                ),
-              ),
-              if (_dayExercises.length > 4)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 6),
-                  child: Text(
-                    '+${_dayExercises.length - 4} more',
-                    style: const TextStyle(color: Colors.white24, fontSize: 11),
-                  ),
-                ),
-            ],
-
-            // Completed summary
-            if (isCompleted) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 18),
-                child: Divider(color: Color(0xFF1E1E35), height: 1),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _MiniStat(
-                        label: 'Exercises',
-                        value: '${_dayLog!.exercises.length}',
-                        color: const Color(0xFF2ECC71)),
-                    _MiniStat(
-                        label: 'Sets',
-                        value: '${_dayLog!.totalSets}',
-                        color: const Color(0xFF2ECC71)),
-                    _MiniStat(
-                        label: 'Volume',
-                        value: '${_dayLog!.totalVolume.toStringAsFixed(0)} kg',
-                        color: const Color(0xFF2ECC71)),
-                  ],
-                ),
-              ),
-            ],
-
-            // CTA Buttons
-            Padding(
-              padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
-              child: _buildCardCTA(isRest, noPlan, isCompleted, isInProgress, accentColor),
-            ),
           ],
-        ),
+
+          // Rest day actions
+          if (isRest) ...[
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                'Recovery is part of the process. Rest well.',
+                style: const TextStyle(
+                    color: Color(0xFF555577), fontSize: 12, height: 1.4),
+              ),
+            ),
+          ] else
+            const SizedBox(height: 16),
+        ],
       ),
     );
   }
 
-  Widget _buildCardCTA(
-      bool isRest, bool noPlan, bool isCompleted, bool isInProgress, Color accentColor) {
-    if (isRest) {
-      return Column(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: _GoldButton(
-                  label: 'Train Anyway',
-                  icon: Icons.fitness_center,
-                  onTap: () async {
-                    await Navigator.push(context, MaterialPageRoute(
-                      builder: (_) => QuickStartScreen(targetDate: _dateStr),
-                    ));
-                    _load();
-                  },
-                  outlined: true,
-                  color: const Color(0xFF3498DB),
-                ),
-              ),
-              const SizedBox(width: 10),
-              _SmallBtn(
-                label: 'Edit Day',
-                icon: Icons.swap_horiz,
-                onTap: _toggleRestDay,
-              ),
-            ],
-          ),
-        ],
-      );
-    }
+  // ─── Stats Strip ─────────────────────────────────────────────────────────────
 
-    if (isCompleted) {
-      return _GoldButton(
-        label: 'View Workout',
-        icon: Icons.visibility_outlined,
-        onTap: _openLog,
-        color: const Color(0xFF2ECC71),
-      );
-    }
-
-    if (isInProgress) {
-      return _GoldButton(
-        label: 'Continue Workout',
-        icon: Icons.play_arrow_rounded,
-        onTap: _openLog,
-      );
-    }
-
-    if (noPlan) {
-      return Row(
-        children: [
-          Expanded(
-            child: _GoldButton(
-              label: 'Quick Start',
-              icon: Icons.bolt_rounded,
-              onTap: () async {
-                await Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => QuickStartScreen(targetDate: _dateStr),
-                ));
-                _load();
-              },
-            ),
-          ),
-          const SizedBox(width: 10),
-          _SmallBtn(
-            label: 'Set Plan',
-            icon: Icons.calendar_month,
-            onTap: () async {
-              await Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const WorkoutPlanScreen()));
-              _load();
-            },
-          ),
-        ],
-      );
-    }
-
-    // Has plan, not logged
-    return Row(
-      children: [
-        Expanded(
-          child: _GoldButton(
-            label: _isFuture ? 'Plan Workout' : 'Log Workout',
-            icon: Icons.fitness_center_rounded,
-            onTap: _logWorkout,
-          ),
-        ),
-        const SizedBox(width: 10),
-        _SmallBtn(
-          label: 'Quick',
-          icon: Icons.bolt_rounded,
-          onTap: () async {
-            await Navigator.push(context, MaterialPageRoute(
-              builder: (_) => QuickStartScreen(targetDate: _dateStr),
-            ));
-            _load();
-          },
-        ),
-      ],
-    );
-  }
-
-  // ─── Stats Row ────────────────────────────────────────────────────────────
-
-  Widget _buildStatsRow() {
+  Widget _buildStatsStrip() {
     final isRest = _dayPlan?.isRestDay ?? false;
     final isCompleted = _dayLog?.completed == true;
     final isInProgress = _dayLog != null && !isCompleted;
 
-    String statusLabel;
-    Color statusColor;
-    IconData statusIcon;
-
+    String todayStatus;
+    Color todayColor;
+    IconData todayIcon;
     if (isRest) {
-      statusLabel = 'Rest';
-      statusColor = const Color(0xFF3498DB);
-      statusIcon = Icons.hotel_rounded;
+      todayStatus = 'Rest';
+      todayColor = const Color(0xFF3498DB);
+      todayIcon = Icons.hotel_rounded;
     } else if (isCompleted) {
-      statusLabel = 'Done';
-      statusColor = const Color(0xFF2ECC71);
-      statusIcon = Icons.check_circle_rounded;
+      todayStatus = 'Done';
+      todayColor = const Color(0xFF2ECC71);
+      todayIcon = Icons.check_circle_rounded;
     } else if (isInProgress) {
-      statusLabel = 'Active';
-      statusColor = const Color(0xFFF39C12);
-      statusIcon = Icons.radio_button_checked;
+      todayStatus = 'Active';
+      todayColor = const Color(0xFFF39C12);
+      todayIcon = Icons.radio_button_checked;
     } else {
-      statusLabel = 'Pending';
-      statusColor = const Color(0xFF555577);
-      statusIcon = Icons.radio_button_unchecked;
+      todayStatus = 'Pending';
+      todayColor = const Color(0xFF555577);
+      todayIcon = Icons.radio_button_unchecked;
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
-        children: [
-          Expanded(
-            child: _StatTile(
-              icon: Icons.local_fire_department_rounded,
-              label: 'Streak',
-              value: '${_streak}d',
-              color: const Color(0xFFFF6B35),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _StatTile(
-              icon: Icons.calendar_today_rounded,
-              label: 'This Week',
-              value: '$_weeklyCount / 6',
-              color: const Color(0xFF9B59B6),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: GestureDetector(
-              onTap: _showWeightDialog,
-              child: _StatTile(
-                icon: Icons.monitor_weight_outlined,
-                label: 'Weight',
-                value: _latestWeight != null
-                    ? '${_latestWeight!.toStringAsFixed(1)} kg'
-                    : 'Log',
-                color: const Color(0xFF3498DB),
+    final stats = [
+      _StatData(Icons.local_fire_department_rounded, '${_streak}d',
+          'Streak', const Color(0xFFFF6B35)),
+      _StatData(Icons.calendar_today_rounded, '$_weeklyCount/7',
+          'This Week', const Color(0xFF9B59B6)),
+      _StatData(Icons.monitor_weight_outlined,
+          _latestWeight != null
+              ? '${_latestWeight!.toStringAsFixed(1)}'
+              : '—',
+          'kg', const Color(0xFF3498DB),
+          onTap: _showWeightDialog),
+      _StatData(Icons.fitness_center_rounded, '$_monthlyCount',
+          'Month', const Color(0xFFF472B6)),
+      _StatData(todayIcon, todayStatus, 'Today', todayColor),
+    ];
+
+    return Row(
+      children: stats.asMap().entries.map((e) {
+        final i = e.key;
+        final s = e.value;
+        return Expanded(
+          child: GestureDetector(
+            onTap: s.onTap,
+            child: Container(
+              margin: EdgeInsets.only(right: i < 4 ? 7 : 0),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A2E),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF1E1E35)),
+              ),
+              child: Column(
+                children: [
+                  Icon(s.icon, color: s.color, size: 14),
+                  const SizedBox(height: 4),
+                  Text(
+                    s.value,
+                    style: TextStyle(
+                        color: s.color,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        height: 1),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    s.label,
+                    style: const TextStyle(
+                        color: Color(0xFF444466),
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.2),
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: _StatTile(
-              icon: statusIcon,
-              label: _isToday ? 'Today' : 'Status',
-              value: statusLabel,
-              color: statusColor,
-            ),
-          ),
-        ],
-      ),
+        );
+      }).toList(),
     );
   }
 
-  // ─── Quick Access ─────────────────────────────────────────────────────────
+  // ─── Quick Access ─────────────────────────────────────────────────────────────
 
   Widget _buildQuickAccess() {
     final items = [
-      _NavItem(Icons.bolt_rounded, 'Quick Start', const Color(0xFFFFD700), () async {
-        await Navigator.push(context, MaterialPageRoute(
-          builder: (_) => QuickStartScreen(targetDate: _dateStr),
-        ));
-        _load();
+      _NavItem(Icons.bar_chart_rounded, 'Progress', 'Charts & PRs',
+          const Color(0xFF2ECC71), () {
+        Navigator.push(
+            context, MaterialPageRoute(builder: (_) => const ProgressScreen()));
       }),
-      _NavItem(Icons.calendar_month_rounded, 'Weekly Plan', const Color(0xFF9B59B6), () async {
-        await Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WorkoutPlanScreen()));
-        _load();
-      }),
-      _NavItem(Icons.bar_chart_rounded, 'Progress', const Color(0xFF2ECC71), () {
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const ProgressScreen()));
-      }),
-      _NavItem(Icons.history_rounded, 'History', const Color(0xFFE67E22), () {
-        Navigator.push(context,
-            MaterialPageRoute(builder: (_) => const WorkoutHistoryScreen()));
-      }),
-      _NavItem(Icons.sports_gymnastics_rounded, 'Exercises', const Color(0xFF3498DB), () {
+      _NavItem(Icons.sports_gymnastics_rounded, 'Exercises', 'Library',
+          const Color(0xFF3498DB), () {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ExerciseLibraryScreen()));
       }),
+      _NavItem(Icons.calendar_month_rounded, 'Weekly Plan', 'PPL & routines',
+          const Color(0xFF9B59B6), () async {
+        await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const WorkoutPlanScreen()));
+        _load();
+      }),
+      _NavItem(Icons.history_rounded, 'History', 'Past workouts',
+          const Color(0xFFE67E22), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const WorkoutHistoryScreen()));
+      }),
     ];
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'QUICK ACCESS',
-            style: TextStyle(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'QUICK ACCESS',
+          style: TextStyle(
               color: Color(0xFF444466),
-              fontSize: 11,
+              fontSize: 10,
               fontWeight: FontWeight.w700,
-              letterSpacing: 1.5,
-            ),
-          ),
-          const SizedBox(height: 10),
-          GridView.count(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            crossAxisCount: 2,
-            mainAxisSpacing: 10,
-            crossAxisSpacing: 10,
-            childAspectRatio: 2.3,
-            children: items.map((item) => _NavCard(item: item)).toList(),
-          ),
-        ],
-      ),
+              letterSpacing: 1.2),
+        ),
+        const SizedBox(height: 10),
+        GridView.count(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisCount: 2,
+          mainAxisSpacing: 10,
+          crossAxisSpacing: 10,
+          childAspectRatio: 2.0,
+          children: items.map((item) => _NavCard(item: item)).toList(),
+        ),
+      ],
     );
   }
 }
 
-// ─── Data class for nav items ─────────────────────────────────────────────────
+// ─── Data classes ─────────────────────────────────────────────────────────────
+
+class _StatData {
+  final IconData icon;
+  final String value;
+  final String label;
+  final Color color;
+  final VoidCallback? onTap;
+  const _StatData(this.icon, this.value, this.label, this.color, {this.onTap});
+}
 
 class _NavItem {
   final IconData icon;
   final String label;
+  final String sub;
   final Color color;
   final VoidCallback onTap;
-  _NavItem(this.icon, this.label, this.color, this.onTap);
+  _NavItem(this.icon, this.label, this.sub, this.color, this.onTap);
 }
 
-// ─── HELPER WIDGETS ───────────────────────────────────────────────────────────
+// ─── Helper Widgets ───────────────────────────────────────────────────────────
 
-class _CircleBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback? onTap;
-  final bool disabled;
-  const _CircleBtn({required this.icon, this.onTap, this.disabled = false});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: disabled ? null : onTap,
-        child: Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: const Color(0xFF12121F),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            icon,
-            color: disabled ? const Color(0xFF222233) : Colors.white60,
-            size: 20,
-          ),
-        ),
-      );
-}
-
-class _Badge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const _Badge({required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(label,
-            style: TextStyle(
-                color: color, fontSize: 10, fontWeight: FontWeight.w700)),
-      );
-}
-
-class _MiniStat extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-  const _MiniStat({required this.label, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) => Column(
-        children: [
-          Text(value,
-              style: TextStyle(
-                  color: color, fontWeight: FontWeight.bold, fontSize: 16)),
-          Text(label,
-              style: const TextStyle(color: Colors.white38, fontSize: 11)),
-        ],
-      );
-}
-
-class _GoldButton extends StatelessWidget {
+class _PillButton extends StatelessWidget {
   final String label;
   final IconData icon;
+  final Color color;
   final VoidCallback onTap;
-  final bool outlined;
-  final Color color;
 
-  const _GoldButton({
+  const _PillButton({
     required this.label,
     required this.icon,
+    required this.color,
     required this.onTap,
-    this.outlined = false,
-    this.color = const Color(0xFFFFD700),
   });
 
   @override
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
         child: Container(
-          height: 46,
-          decoration: BoxDecoration(
-            gradient: outlined
-                ? null
-                : LinearGradient(
-                    colors: [color, Color.lerp(color, Colors.orange, 0.4)!],
-                  ),
-            color: outlined ? Colors.transparent : null,
-            borderRadius: BorderRadius.circular(14),
-            border: outlined ? Border.all(color: color.withValues(alpha: 0.6)) : null,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: outlined ? color : Colors.black, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: outlined ? color : Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-}
-
-class _SmallBtn extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final VoidCallback onTap;
-
-  const _SmallBtn({required this.label, required this.icon, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          height: 46,
+          height: 38,
           padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
-            color: const Color(0xFF1A1A2E),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: const Color(0xFF2A2A45)),
+            color: color,
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, color: Colors.white38, size: 16),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: const TextStyle(color: Colors.white38, fontSize: 13)),
+              Icon(icon, color: Colors.black, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13),
+              ),
             ],
           ),
-        ),
-      );
-}
-
-class _StatTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color color;
-
-  const _StatTile({
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF12121F),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(height: 5),
-            Text(value,
-                style: TextStyle(
-                    color: color,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold)),
-            Text(label,
-                style: const TextStyle(
-                    color: Color(0xFF444466), fontSize: 10)),
-          ],
         ),
       );
 }
@@ -1064,32 +1201,45 @@ class _NavCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: const Color(0xFF12121F),
+        color: const Color(0xFF1A1A2E),
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           onTap: item.onTap,
           borderRadius: BorderRadius.circular(14),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
                     color: item.color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(item.icon, color: item.color, size: 17),
+                  child: Icon(item.icon, color: item.color, size: 18),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    item.label,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        item.label,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        item.sub,
+                        style: const TextStyle(
+                            color: Color(0xFF555577),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w500),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -1150,7 +1300,8 @@ class _OptionTile extends StatelessWidget {
                     ],
                   ),
                 ),
-                Icon(Icons.chevron_right_rounded, color: color.withValues(alpha: 0.4), size: 18),
+                Icon(Icons.chevron_right_rounded,
+                    color: color.withValues(alpha: 0.4), size: 18),
               ],
             ),
           ),
