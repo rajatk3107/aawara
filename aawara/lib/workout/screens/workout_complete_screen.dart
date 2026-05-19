@@ -1,4 +1,9 @@
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
@@ -22,10 +27,13 @@ class WorkoutCompleteScreen extends StatefulWidget {
 class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
     with SingleTickerProviderStateMixin {
   final _db = WorkoutDatabase.instance;
+  final _screenshotKey = GlobalKey();
+  final _scrollController = ScrollController();
 
   int _mood = 3;
   _PRRecord? _pr;
   bool _prChecked = false;
+  bool _sharing = false;
 
   late final AnimationController _anim;
   late final Animation<double> _scale;
@@ -45,7 +53,53 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
   @override
   void dispose() {
     _anim.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _shareScreenshot() async {
+    setState(() => _sharing = true);
+    try {
+      // Scroll to top so the screenshot shows the full summary from the start
+      await _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+      // Wait for the frame to settle after scroll
+      await Future.delayed(const Duration(milliseconds: 350));
+
+      final boundary = _screenshotKey.currentContext
+          ?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final dir = await getTemporaryDirectory();
+      final file = File(
+          '${dir.path}/aawara_${widget.log.workoutName.replaceAll(' ', '_')}.png');
+      await file.writeAsBytes(byteData.buffer.asUint8List());
+
+      if (!mounted) return;
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'image/png')],
+        subject:
+            '${widget.log.workoutName} — ${_durationStr} · ${_fmtVol(widget.log.totalVolume)} kg',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Could not share: $e'),
+          backgroundColor: const Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
   }
 
   Future<void> _detectPR() async {
@@ -120,7 +174,9 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
-      body: Stack(
+      body: RepaintBoundary(
+        key: _screenshotKey,
+        child: Stack(
         children: [
           // Radial gold glow at top
           Positioned(
@@ -145,6 +201,7 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
               children: [
                 Expanded(
                   child: SingleChildScrollView(
+                    controller: _scrollController,
                     padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -176,6 +233,7 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
             child: _buildBottomBar(),
           ),
         ],
+      ),
       ),
     );
   }
@@ -544,36 +602,40 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
       ),
       child: Row(
         children: [
-          // Share ghost button
+          // Share button
           Expanded(
             flex: 1,
             child: GestureDetector(
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                  content: Text('Sharing coming soon'),
-                  behavior: SnackBarBehavior.floating,
-                  backgroundColor: Color(0xFF1A1A2E),
-                ));
-              },
+              onTap: _sharing ? null : _shareScreenshot,
               child: Container(
                 height: 52,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: const Color(0xFF333355)),
                 ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.share_rounded,
-                        color: Color(0xFFA8A8B3), size: 18),
-                    SizedBox(width: 8),
-                    Text('Share',
-                        style: TextStyle(
-                            color: Color(0xFFA8A8B3),
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14)),
-                  ],
-                ),
+                child: _sharing
+                    ? const Center(
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Color(0xFFA8A8B3)),
+                        ),
+                      )
+                    : const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.share_rounded,
+                              color: Color(0xFFA8A8B3), size: 18),
+                          SizedBox(width: 8),
+                          Text('Share',
+                              style: TextStyle(
+                                  color: Color(0xFFA8A8B3),
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14)),
+                        ],
+                      ),
               ),
             ),
           ),
