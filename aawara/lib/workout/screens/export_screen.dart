@@ -399,10 +399,29 @@ class _ExportScreenState extends State<ExportScreen> {
         surfaceTintColor: Colors.transparent,
         iconTheme: const IconThemeData(color: Colors.white),
         title: const Text(
-          'Export Data',
+          'Export / Import',
           style: TextStyle(
               color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
         ),
+        actions: [
+          TextButton.icon(
+            onPressed: _importing ? null : _import,
+            icon: _importing
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Color(0xFF2ECC71)),
+                  )
+                : const Icon(Icons.upload_file_rounded,
+                    color: Color(0xFF2ECC71), size: 18),
+            label: Text(
+              _importing ? 'Importing…' : 'Restore',
+              style: const TextStyle(
+                  color: Color(0xFF2ECC71), fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
