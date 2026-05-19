@@ -418,6 +418,9 @@ class _ExportScreenState extends State<ExportScreen> {
           _buildFormatToggle(),
           const SizedBox(height: 20),
           _buildPreviewCard(),
+          const SizedBox(height: 28),
+          _sectionLabel('RESTORE FROM BACKUP'),
+          _buildImportCard(),
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -425,41 +428,6 @@ class _ExportScreenState extends State<ExportScreen> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Row(
             children: [
-              // Restore from backup — compact icon button
-              Tooltip(
-                message: 'Restore from Backup',
-                child: GestureDetector(
-                  onTap: _importing ? null : _import,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF12121F),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: _importing
-                            ? const Color(0xFF333355)
-                            : const Color(0xFF333355),
-                      ),
-                    ),
-                    child: _importing
-                        ? const Center(
-                            child: SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Color(0xFF2ECC71)),
-                            ),
-                          )
-                        : const Icon(Icons.upload_file_rounded,
-                            color: Color(0xFF888899), size: 22),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Export — primary CTA
               Expanded(
                 child: GestureDetector(
                   onTap: _exporting ? null : _export,
@@ -519,6 +487,73 @@ class _ExportScreenState extends State<ExportScreen> {
           ),
         ),
       );
+
+  // ─── Import card ─────────────────────────────────────────────────────────
+
+  Widget _buildImportCard() {
+    return GestureDetector(
+      onTap: _importing ? null : _import,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF12121F),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _importing
+                ? const Color(0xFF333355)
+                : const Color(0xFF2ECC71).withValues(alpha: 0.35),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF2ECC71).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _importing
+                  ? const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Color(0xFF2ECC71)),
+                      ),
+                    )
+                  : const Icon(Icons.upload_file_rounded,
+                      color: Color(0xFF2ECC71), size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _importing ? 'Importing…' : 'Restore from Backup',
+                    style: TextStyle(
+                      color: _importing ? const Color(0xFF555577) : Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Pick a JSON file exported from Aawara',
+                    style: TextStyle(color: Color(0xFF555577), fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Color(0xFF444466), size: 20),
+          ],
+        ),
+      ),
+    );
+  }
 
   // ─── Range chips ──────────────────────────────────────────────────────────
 
