@@ -148,7 +148,7 @@ Current schema version: **5**
 **Prerequisites**: Flutter 3.x, Android SDK (or Xcode for iOS)
 
 ```bash
-cd i_am_rich
+cd aawara
 flutter pub get
 flutter run
 ```
