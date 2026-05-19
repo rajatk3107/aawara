@@ -1,5 +1,5 @@
-name: i_am_rich
-description: "I Am Rich - A luxurious Flutter app"
+name: aawara
+description: "Aawara - Personal fitness tracker built with Flutter"
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -22,6 +22,7 @@ dependencies:
   intl: ^0.20.0
   fl_chart: ^0.68.0
   share_plus: ^10.0.0
+  file_picker: ^8.0.7
 
 dependency_overrides:
   intl: ^0.20.0

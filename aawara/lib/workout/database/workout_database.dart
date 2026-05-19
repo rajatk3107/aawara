@@ -1126,6 +1126,106 @@ class WorkoutDatabase {
   String _fmt(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+  // ─── IMPORT ─────────────────────────────────────────────────────────────────
+
+  /// Imports workouts from a JSON string produced by the export screen.
+  /// Returns a record with the count of imported and skipped workouts.
+  /// A workout is skipped if a log for that date already exists in the DB.
+  Future<({int imported, int skipped})> importFromJson(String jsonStr) async {
+    final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+    final workouts =
+        (data['workouts'] as List? ?? []).cast<Map<String, dynamic>>();
+
+    const uuid = Uuid();
+    int imported = 0;
+    int skipped = 0;
+
+    // Build name → id cache from existing exercises (case-insensitive lookup)
+    final nameCache = <String, String>{};
+    for (final ex in await getAllExercises()) {
+      nameCache[ex.name.toLowerCase()] = ex.id;
+    }
+
+    final db = await database;
+
+    for (final w in workouts) {
+      final date = w['date'] as String? ?? '';
+      if (date.isEmpty) { skipped++; continue; }
+
+      // Skip if any workout already exists on this date
+      final existing = await db.query('workout_logs',
+          where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skipped++; continue; }
+
+      final logId = uuid.v4();
+      await db.insert('workout_logs', {
+        'id': logId,
+        'date': date,
+        'workout_name': w['workout_name'] as String? ?? 'Imported Workout',
+        'completed': (w['completed'] as bool? ?? false) ? 1 : 0,
+        'duration_seconds': w['duration_seconds'] as int?,
+        'notes': w['notes'] as String?,
+        'plan_day_id': null,
+      });
+
+      final exercises =
+          (w['exercises'] as List? ?? []).cast<Map<String, dynamic>>();
+
+      for (int i = 0; i < exercises.length; i++) {
+        final e = exercises[i];
+        final name = (e['name'] as String? ?? '').trim();
+        if (name.isEmpty) continue;
+
+        // Find existing exercise by name or create a new custom one
+        String exId;
+        if (nameCache.containsKey(name.toLowerCase())) {
+          exId = nameCache[name.toLowerCase()]!;
+        } else {
+          exId = uuid.v4();
+          await db.insert('exercises', {
+            'id': exId,
+            'name': name,
+            'muscle_group': e['muscle_group'] as String? ?? 'Full Body',
+            'equipment': e['equipment'] as String? ?? 'Other',
+            'is_custom': 1,
+            'exercise_type': e['exercise_type'] as String? ?? 'strength',
+          });
+          nameCache[name.toLowerCase()] = exId;
+        }
+
+        final exLogId = uuid.v4();
+        await db.insert('exercise_logs', {
+          'id': exLogId,
+          'workout_log_id': logId,
+          'exercise_id': exId,
+          'order_index': i,
+        });
+
+        final sets =
+            (e['sets'] as List? ?? []).cast<Map<String, dynamic>>();
+        for (final s in sets) {
+          await db.insert('set_logs', {
+            'id': uuid.v4(),
+            'exercise_log_id': exLogId,
+            'set_number': s['set_number'] as int? ?? 1,
+            'weight': (s['weight_kg'] as num?)?.toDouble(),
+            'reps': s['reps'] as int?,
+            'is_completed': (s['is_completed'] as bool? ?? false) ? 1 : 0,
+            'duration_seconds': s['duration_seconds'] as int?,
+            'speed': (s['speed'] as num?)?.toDouble(),
+            'incline': (s['incline'] as num?)?.toDouble(),
+            'resistance': (s['resistance'] as num?)?.toDouble(),
+            'distance_km': (s['distance_km'] as num?)?.toDouble(),
+          });
+        }
+      }
+
+      imported++;
+    }
+
+    return (imported: imported, skipped: skipped);
+  }
+
   Future<void> close() async {
     final db = await database;
     await db.close();

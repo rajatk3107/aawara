@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,6 +42,7 @@ class _ExportScreenState extends State<ExportScreen> {
   int? _previewSets;
 
   bool _exporting = false;
+  bool _importing = false;
   bool _loadingPreview = false;
 
   @override
@@ -148,6 +150,103 @@ class _ExportScreenState extends State<ExportScreen> {
     }
   }
 
+  // ─── Import ───────────────────────────────────────────────────────────────
+
+  Future<void> _import() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+      withData: true,
+    );
+    if (result == null || result.files.isEmpty) return;
+
+    final bytes = result.files.first.bytes;
+    if (bytes == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not read file.'),
+          backgroundColor: Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
+
+    final jsonStr = String.fromCharCodes(bytes);
+    Map<String, dynamic> parsed;
+    try {
+      parsed = jsonDecode(jsonStr) as Map<String, dynamic>;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Invalid JSON file. Please pick an Aawara export.'),
+          backgroundColor: Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
+    }
+
+    final count =
+        (parsed['workouts'] as List? ?? []).length;
+    if (!mounted) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Import Workouts',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Found $count workout${count == 1 ? '' : 's'} in this file.\n\n'
+          'Workouts on dates that already have an entry will be skipped. '
+          'This will not overwrite any existing data.',
+          style: const TextStyle(color: Color(0xFFCCCCDD), height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Color(0xFF888899))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Import',
+                style: TextStyle(
+                    color: Color(0xFFFFD700), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _importing = true);
+    try {
+      final (:imported, :skipped) = await _db.importFromJson(jsonStr);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              '$imported workout${imported == 1 ? '' : 's'} imported'
+              '${skipped > 0 ? ', $skipped skipped (date conflict)' : ''}'),
+          backgroundColor: const Color(0xFF2ECC71),
+          behavior: SnackBarBehavior.floating,
+        ));
+        _refreshPreview();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Import failed: $e'),
+          backgroundColor: const Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
   // ─── CSV builder ──────────────────────────────────────────────────────────
 
   String _buildCsv(List<WorkoutLog> logs, Map<String, Exercise> exMap) {
@@ -190,6 +289,8 @@ class _ExportScreenState extends State<ExportScreen> {
     String to,
   ) {
     final payload = {
+      'app': 'aawara',
+      'schema_version': 1,
       'exported_at': DateTime.now().toIso8601String(),
       'date_range': {'from': from, 'to': to},
       'exercise_filter': _filterExercise?.name ?? 'All',
@@ -200,6 +301,8 @@ class _ExportScreenState extends State<ExportScreen> {
                 'date': log.date,
                 'workout_name': log.workoutName,
                 'completed': log.completed,
+                if (log.durationSeconds != null)
+                  'duration_seconds': log.durationSeconds,
                 'total_volume_kg': log.totalVolume,
                 'exercises': log.exercises
                     .map((exLog) {
@@ -208,11 +311,21 @@ class _ExportScreenState extends State<ExportScreen> {
                         'name': ex?.name ?? exLog.exerciseId,
                         'muscle_group': ex?.muscleGroup ?? '',
                         'equipment': ex?.equipment ?? '',
+                        'exercise_type': ex?.exerciseType ?? 'strength',
                         'sets': exLog.sets
                             .map((s) => {
                                   'set_number': s.setNumber,
+                                  'is_completed': s.isCompleted,
                                   if (s.weight != null) 'weight_kg': s.weight,
                                   if (s.reps != null) 'reps': s.reps,
+                                  if (s.durationSeconds != null)
+                                    'duration_seconds': s.durationSeconds,
+                                  if (s.speed != null) 'speed': s.speed,
+                                  if (s.incline != null) 'incline': s.incline,
+                                  if (s.resistance != null)
+                                    'resistance': s.resistance,
+                                  if (s.distanceKm != null)
+                                    'distance_km': s.distanceKm,
                                 })
                             .toList(),
                       };
@@ -310,43 +423,84 @@ class _ExportScreenState extends State<ExportScreen> {
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: GestureDetector(
-            onTap: _exporting ? null : _export,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              height: 54,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: _exporting
-                      ? [const Color(0xFF888866), const Color(0xFF666644)]
-                      : [const Color(0xFFFFD700), const Color(0xFFFFA500)],
-                ),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_exporting)
-                    const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.black54),
-                    )
-                  else
-                    const Icon(Icons.ios_share_rounded,
-                        color: Colors.black, size: 20),
-                  const SizedBox(width: 10),
-                  Text(
-                    _exporting ? 'Preparing…' : 'Export File',
-                    style: const TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15),
+          child: Row(
+            children: [
+              // Restore from backup — compact icon button
+              Tooltip(
+                message: 'Restore from Backup',
+                child: GestureDetector(
+                  onTap: _importing ? null : _import,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 54,
+                    height: 54,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF12121F),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: _importing
+                            ? const Color(0xFF333355)
+                            : const Color(0xFF333355),
+                      ),
+                    ),
+                    child: _importing
+                        ? const Center(
+                            child: SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Color(0xFF2ECC71)),
+                            ),
+                          )
+                        : const Icon(Icons.upload_file_rounded,
+                            color: Color(0xFF888899), size: 22),
                   ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(width: 10),
+              // Export — primary CTA
+              Expanded(
+                child: GestureDetector(
+                  onTap: _exporting ? null : _export,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    height: 54,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: _exporting
+                            ? [const Color(0xFF888866), const Color(0xFF666644)]
+                            : [const Color(0xFFFFD700), const Color(0xFFFFA500)],
+                      ),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (_exporting)
+                          const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.black54),
+                          )
+                        else
+                          const Icon(Icons.ios_share_rounded,
+                              color: Colors.black, size: 20),
+                        const SizedBox(width: 10),
+                        Text(
+                          _exporting ? 'Preparing…' : 'Export File',
+                          style: const TextStyle(
+                              color: Colors.black,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
