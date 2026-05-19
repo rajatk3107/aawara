@@ -229,13 +229,39 @@ class _ExerciseFormSheetState extends State<ExerciseFormSheet> {
   late TextEditingController _nameCtrl;
   late String _group;
   late String _equipment;
+  late String _exerciseType; // 'strength' or 'cardio'
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.existing?.name ?? '');
-    _group = widget.existing?.muscleGroup ?? kMuscleGroups.first;
-    _equipment = widget.existing?.equipment ?? kEquipmentTypes.first;
+    _exerciseType = widget.existing?.exerciseType ?? 'strength';
+    if (_exerciseType == 'cardio') {
+      _group = 'Cardio';
+      _equipment = _validCardioEquipment(widget.existing?.equipment);
+    } else {
+      _group = widget.existing?.muscleGroup ?? kMuscleGroups.first;
+      _equipment = _validStrengthEquipment(widget.existing?.equipment);
+    }
+  }
+
+  String _validCardioEquipment(String? v) =>
+      kCardioMachineTypes.contains(v) ? v! : kCardioMachineTypes.first;
+
+  String _validStrengthEquipment(String? v) =>
+      kEquipmentTypes.contains(v) ? v! : kEquipmentTypes.first;
+
+  void _switchType(String type) {
+    setState(() {
+      _exerciseType = type;
+      if (type == 'cardio') {
+        _group = 'Cardio';
+        _equipment = kCardioMachineTypes.first;
+      } else {
+        _group = kMuscleGroups.first;
+        _equipment = kEquipmentTypes.first;
+      }
+    });
   }
 
   @override
@@ -253,12 +279,14 @@ class _ExerciseFormSheetState extends State<ExerciseFormSheet> {
       muscleGroup: _group,
       equipment: _equipment,
       isCustom: true,
+      exerciseType: _exerciseType,
     );
     Navigator.pop(context, ex);
   }
 
   @override
   Widget build(BuildContext context) {
+    final isCardio = _exerciseType == 'cardio';
     return Padding(
       padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -290,28 +318,64 @@ class _ExerciseFormSheetState extends State<ExerciseFormSheet> {
                   fontSize: 20,
                   fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+            // Strength / Cardio toggle
+            Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D1A),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              padding: const EdgeInsets.all(4),
+              child: Row(
+                children: [
+                  _TypeTab(
+                    label: 'Strength',
+                    icon: Icons.fitness_center,
+                    selected: !isCardio,
+                    onTap: () => _switchType('strength'),
+                  ),
+                  _TypeTab(
+                    label: 'Cardio',
+                    icon: Icons.directions_run,
+                    selected: isCardio,
+                    onTap: () => _switchType('cardio'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             const _Label('Exercise Name'),
             TextField(
               controller: _nameCtrl,
               autofocus: true,
               style: const TextStyle(color: Colors.white),
-              decoration: _dec('e.g. Incline Dumbbell Press'),
+              decoration: _dec(isCardio
+                  ? 'e.g. Morning Cardio'
+                  : 'e.g. Incline Dumbbell Press'),
             ),
             const SizedBox(height: 16),
-            const _Label('Muscle Group'),
-            _DropdownField(
-              value: _group,
-              items: kMuscleGroups,
-              onChanged: (v) => setState(() => _group = v!),
-            ),
-            const SizedBox(height: 16),
-            const _Label('Equipment'),
-            _DropdownField(
-              value: _equipment,
-              items: kEquipmentTypes,
-              onChanged: (v) => setState(() => _equipment = v!),
-            ),
+            if (!isCardio) ...[
+              const _Label('Muscle Group'),
+              _DropdownField(
+                value: _group,
+                items: kMuscleGroups,
+                onChanged: (v) => setState(() => _group = v!),
+              ),
+              const SizedBox(height: 16),
+              const _Label('Equipment'),
+              _DropdownField(
+                value: _equipment,
+                items: kEquipmentTypes,
+                onChanged: (v) => setState(() => _equipment = v!),
+              ),
+            ] else ...[
+              const _Label('Machine Type'),
+              _DropdownField(
+                value: _equipment,
+                items: kCardioMachineTypes,
+                onChanged: (v) => setState(() => _equipment = v!),
+              ),
+            ],
             const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
@@ -372,6 +436,53 @@ class _Label extends StatelessWidget {
                 fontWeight: FontWeight.w600,
                 letterSpacing: 0.5)),
       );
+}
+
+class _TypeTab extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TypeTab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: selected ? const Color(0xFFFFD700) : Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 16,
+                  color: selected ? Colors.black : const Color(0xFF888899)),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? Colors.black : const Color(0xFF888899),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _DropdownField extends StatelessWidget {

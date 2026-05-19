@@ -5,6 +5,13 @@ class SetLog {
   final double? weight;
   final int? reps;
   final String? notes;
+  final bool isCompleted;       // persisted checkmark
+  // Cardio fields
+  final int? durationSeconds;   // duration for cardio sets
+  final double? speed;          // treadmill km/h, stair climber steps/min
+  final double? incline;        // treadmill incline %
+  final double? resistance;     // cross trainer / cycling resistance level
+  final double? distanceKm;     // rowing / other cardio distance
 
   const SetLog({
     required this.id,
@@ -13,6 +20,12 @@ class SetLog {
     this.weight,
     this.reps,
     this.notes,
+    this.isCompleted = false,
+    this.durationSeconds,
+    this.speed,
+    this.incline,
+    this.resistance,
+    this.distanceKm,
   });
 
   Map<String, dynamic> toMap() => {
@@ -22,6 +35,12 @@ class SetLog {
         'weight': weight,
         'reps': reps,
         'notes': notes,
+        'is_completed': isCompleted ? 1 : 0,
+        'duration_seconds': durationSeconds,
+        'speed': speed,
+        'incline': incline,
+        'resistance': resistance,
+        'distance_km': distanceKm,
       };
 
   factory SetLog.fromMap(Map<String, dynamic> map) => SetLog(
@@ -31,6 +50,12 @@ class SetLog {
         weight: (map['weight'] as num?)?.toDouble(),
         reps: map['reps'] as int?,
         notes: map['notes'] as String?,
+        isCompleted: (map['is_completed'] as int? ?? 0) == 1,
+        durationSeconds: map['duration_seconds'] as int?,
+        speed: (map['speed'] as num?)?.toDouble(),
+        incline: (map['incline'] as num?)?.toDouble(),
+        resistance: (map['resistance'] as num?)?.toDouble(),
+        distanceKm: (map['distance_km'] as num?)?.toDouble(),
       );
 
   SetLog copyWith({
@@ -40,6 +65,12 @@ class SetLog {
     double? weight,
     int? reps,
     String? notes,
+    bool? isCompleted,
+    int? durationSeconds,
+    double? speed,
+    double? incline,
+    double? resistance,
+    double? distanceKm,
   }) =>
       SetLog(
         id: id ?? this.id,
@@ -48,6 +79,12 @@ class SetLog {
         weight: weight ?? this.weight,
         reps: reps ?? this.reps,
         notes: notes ?? this.notes,
+        isCompleted: isCompleted ?? this.isCompleted,
+        durationSeconds: durationSeconds ?? this.durationSeconds,
+        speed: speed ?? this.speed,
+        incline: incline ?? this.incline,
+        resistance: resistance ?? this.resistance,
+        distanceKm: distanceKm ?? this.distanceKm,
       );
 
   double get volume => (weight ?? 0) * (reps ?? 0);
@@ -93,6 +130,7 @@ class WorkoutLog {
   final String workoutName;
   final String? notes;
   final bool completed;
+  final int? durationSeconds; // stored when workout is finished
   final List<ExerciseLog> exercises;
 
   WorkoutLog({
@@ -102,6 +140,7 @@ class WorkoutLog {
     required this.workoutName,
     this.notes,
     this.completed = false,
+    this.durationSeconds,
     List<ExerciseLog>? exercises,
   }) : exercises = exercises ?? [];
 
@@ -112,6 +151,7 @@ class WorkoutLog {
         'workout_name': workoutName,
         'notes': notes,
         'completed': completed ? 1 : 0,
+        'duration_seconds': durationSeconds,
       };
 
   factory WorkoutLog.fromMap(Map<String, dynamic> map) => WorkoutLog(
@@ -121,6 +161,7 @@ class WorkoutLog {
         workoutName: map['workout_name'] as String,
         notes: map['notes'] as String?,
         completed: (map['completed'] as int) == 1,
+        durationSeconds: map['duration_seconds'] as int?,
       );
 
   WorkoutLog copyWith({
@@ -130,6 +171,7 @@ class WorkoutLog {
     String? workoutName,
     String? notes,
     bool? completed,
+    int? durationSeconds,
     List<ExerciseLog>? exercises,
   }) =>
       WorkoutLog(
@@ -139,6 +181,7 @@ class WorkoutLog {
         workoutName: workoutName ?? this.workoutName,
         notes: notes ?? this.notes,
         completed: completed ?? this.completed,
+        durationSeconds: durationSeconds ?? this.durationSeconds,
         exercises: exercises ?? this.exercises,
       );
 

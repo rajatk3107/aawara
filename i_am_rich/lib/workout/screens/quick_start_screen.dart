@@ -160,6 +160,11 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
   Future<void> _startWorkout() async {
     if (_exercises.isEmpty) return;
     setState(() => _loading = true);
+    // Auto-save any edits to the PPL template so next launch uses the new list
+    if (_kPplPresets.containsKey(_workoutName)) {
+      await _db.saveQuickStartTemplate(
+          _workoutName, _exercises.map((e) => e.id).toList());
+    }
     const uuid = Uuid();
     final log = WorkoutLog(
       id: uuid.v4(),

@@ -23,7 +23,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -33,6 +33,18 @@ class WorkoutDatabase {
     if (oldVersion < 2) await _addMissingExercises(db);
     if (oldVersion < 3) await _addBodyWeightTable(db);
     if (oldVersion < 4) await _addQuickStartTemplatesTable(db);
+    if (oldVersion < 5) await _migrateV5(db);
+  }
+
+  Future<void> _migrateV5(Database db) async {
+    await db.execute('ALTER TABLE exercises ADD COLUMN exercise_type TEXT DEFAULT "strength"');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN is_completed INTEGER DEFAULT 0');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN duration_seconds INTEGER');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN speed REAL');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN incline REAL');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN resistance REAL');
+    await db.execute('ALTER TABLE set_logs ADD COLUMN distance_km REAL');
+    await db.execute('ALTER TABLE workout_logs ADD COLUMN duration_seconds INTEGER');
   }
 
   Future<void> _addQuickStartTemplatesTable(Database db) async {
@@ -102,7 +114,8 @@ class WorkoutDatabase {
         name TEXT NOT NULL,
         muscle_group TEXT NOT NULL,
         equipment TEXT NOT NULL,
-        is_custom INTEGER NOT NULL DEFAULT 0
+        is_custom INTEGER NOT NULL DEFAULT 0,
+        exercise_type TEXT NOT NULL DEFAULT 'strength'
       )
     ''');
 
@@ -138,7 +151,8 @@ class WorkoutDatabase {
         plan_day_id TEXT,
         workout_name TEXT NOT NULL,
         notes TEXT,
-        completed INTEGER NOT NULL DEFAULT 0
+        completed INTEGER NOT NULL DEFAULT 0,
+        duration_seconds INTEGER
       )
     ''');
 
@@ -158,7 +172,13 @@ class WorkoutDatabase {
         set_number INTEGER NOT NULL,
         weight REAL,
         reps INTEGER,
-        notes TEXT
+        notes TEXT,
+        is_completed INTEGER DEFAULT 0,
+        duration_seconds INTEGER,
+        speed REAL,
+        incline REAL,
+        resistance REAL,
+        distance_km REAL
       )
     ''');
 
