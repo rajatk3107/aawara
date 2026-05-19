@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../models/workout_plan_day.dart';
@@ -32,6 +33,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   int _weeklyCount = 0;
   int _monthlyCount = 0;
   double? _latestWeight;
+  String? _userGoal;
 
   // Week strip
   Map<int, WorkoutPlanDay?> _weekPlanDays = {};
@@ -68,6 +70,9 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final userGoal = prefs.getString('user_goal');
+
       final now = DateTime.now();
       final weekMonday = now.subtract(Duration(days: now.weekday - 1));
       final weekSunday = weekMonday.add(const Duration(days: 6));
@@ -123,6 +128,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _latestWeight = weight;
           _weekPlanDays = weekMap;
           _weekCompletedDates = completedDates;
+          _userGoal = userGoal;
           _loading = false;
         });
       }
@@ -455,12 +461,23 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     final now = DateTime.now();
     final hour = now.hour;
     String greeting;
-    if (hour < 12) {
-      greeting = 'Good morning!';
-    } else if (hour < 17) {
-      greeting = 'Ready to train?';
-    } else {
-      greeting = 'Evening session?';
+    switch (_userGoal) {
+      case 'muscle_gain':
+        greeting = 'Ready to build?';
+      case 'strength':
+        greeting = 'Time to get strong.';
+      case 'weight_loss':
+        greeting = "Let's burn it.";
+      case 'general_fitness':
+        greeting = 'Stay active!';
+      default:
+        if (hour < 12) {
+          greeting = 'Good morning!';
+        } else if (hour < 17) {
+          greeting = 'Ready to train?';
+        } else {
+          greeting = 'Evening session?';
+        }
     }
     final dayName = DateFormat('EEEE').format(now);
     final dateLabel = DateFormat('MMM d').format(now);

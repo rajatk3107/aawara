@@ -212,9 +212,40 @@ class WorkoutDatabase {
     (7, 'Rest', true, <String>[]),
   ];
 
-  Future<void> _seedPplWeeklyPlan(Database db) async {
+  static const _kStrengthSchedule = [
+    (1, 'Upper A', false, ['Bench Press', 'Barbell Row', 'Overhead Press', 'Pull-ups', 'Tricep Pushdown', 'Barbell Curl']),
+    (2, 'Lower A', false, ['Squat', 'Romanian Deadlift', 'Leg Press', 'Leg Curl', 'Calf Raises']),
+    (3, 'Rest', true, <String>[]),
+    (4, 'Upper B', false, ['Incline Bench Press', 'Seated Cable Row', 'Lateral Raises', 'Hammer Curl', 'Skull Crushers']),
+    (5, 'Lower B', false, ['Deadlift', 'Hack Squat', 'Walking Lunges', 'Leg Extension', 'Seated Calf Raises']),
+    (6, 'Rest', true, <String>[]),
+    (7, 'Rest', true, <String>[]),
+  ];
+
+  static const _kWeightLossSchedule = [
+    (1, 'Full Body A', false, ['Squat', 'Bench Press', 'Barbell Row', 'Overhead Press', 'Plank']),
+    (2, 'Rest', true, <String>[]),
+    (3, 'Full Body B', false, ['Deadlift', 'Incline Bench Press', 'Pull-ups', 'Lateral Raises', 'Mountain Climbers']),
+    (4, 'Rest', true, <String>[]),
+    (5, 'Full Body C', false, ['Leg Press', 'Incline Dumbbell Press', 'Seated Cable Row', 'Tricep Pushdown', 'Barbell Curl']),
+    (6, 'Rest', true, <String>[]),
+    (7, 'Rest', true, <String>[]),
+  ];
+
+  static const _kGeneralFitnessSchedule = [
+    (1, 'Workout A', false, ['Squat', 'Bench Press', 'Barbell Row']),
+    (2, 'Rest', true, <String>[]),
+    (3, 'Workout B', false, ['Overhead Press', 'Deadlift', 'Pull-ups']),
+    (4, 'Rest', true, <String>[]),
+    (5, 'Workout A', false, ['Squat', 'Bench Press', 'Barbell Row']),
+    (6, 'Rest', true, <String>[]),
+    (7, 'Rest', true, <String>[]),
+  ];
+
+  Future<void> _seedSchedule(
+      Database db, List<(int, String, bool, List<String>)> schedule) async {
     const uuid = Uuid();
-    for (final (dow, name, isRest, exNames) in _kPplSchedule) {
+    for (final (dow, name, isRest, exNames) in schedule) {
       final dayId = uuid.v4();
       await db.insert('workout_plan_days', {
         'id': dayId,
@@ -236,15 +267,52 @@ class WorkoutDatabase {
     }
   }
 
-  /// Replaces the entire weekly plan with the 6-day PPL schedule from the training plan.
-  /// Safe to call for existing users — always replaces.
+  Future<void> _ensureExercise(
+      Database db, String name, String group, String equip) async {
+    final existing = await db.query('exercises',
+        where: 'LOWER(name) = LOWER(?)', whereArgs: [name], limit: 1);
+    if (existing.isEmpty) {
+      await db.insert('exercises', {
+        'id': const Uuid().v4(),
+        'name': name,
+        'muscle_group': group,
+        'equipment': equip,
+        'is_custom': 0,
+        'exercise_type': 'strength',
+      });
+    }
+  }
+
+  Future<void> _seedPplWeeklyPlan(Database db) async =>
+      _seedSchedule(db, _kPplSchedule);
+
+  /// Replaces the entire weekly plan with the 6-day PPL schedule.
   Future<void> loadPplWeeklyPlan() async {
     final db = await database;
-    // Clear existing plan
     for (final (dow, _, _, _) in _kPplSchedule) {
       await deletePlanDay(dow);
     }
     await _seedPplWeeklyPlan(db);
+  }
+
+  /// Seeds a full weekly plan matching the given goal key.
+  /// Clears all existing plan days first.
+  Future<void> seedGoalPlan(String goal) async {
+    final db = await database;
+    for (int i = 1; i <= 7; i++) {
+      await deletePlanDay(i);
+    }
+    switch (goal) {
+      case 'muscle_gain':
+        await _seedSchedule(db, _kPplSchedule);
+      case 'strength':
+        await _seedSchedule(db, _kStrengthSchedule);
+      case 'weight_loss':
+        await _ensureExercise(db, 'Mountain Climbers', 'Core', 'Bodyweight');
+        await _seedSchedule(db, _kWeightLossSchedule);
+      case 'general_fitness':
+        await _seedSchedule(db, _kGeneralFitnessSchedule);
+    }
   }
 
   Future<void> _seedDefaultExercises(Database db) async {
@@ -321,6 +389,7 @@ class WorkoutDatabase {
       {'name': 'Crunches', 'group': 'Core', 'equip': 'Bodyweight'},
       {'name': 'Russian Twists', 'group': 'Core', 'equip': 'Bodyweight'},
       {'name': 'Leg Raises', 'group': 'Core', 'equip': 'Bodyweight'},
+      {'name': 'Mountain Climbers', 'group': 'Core', 'equip': 'Bodyweight'},
       {'name': 'Cable Crunches', 'group': 'Core', 'equip': 'Cable'},
       {'name': 'Ab Wheel Rollout', 'group': 'Core', 'equip': 'Other'},
       {'name': 'Hanging Leg Raises', 'group': 'Core', 'equip': 'Bodyweight'},
