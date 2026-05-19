@@ -17,7 +17,8 @@ class WorkoutLoggingScreen extends StatefulWidget {
   State<WorkoutLoggingScreen> createState() => _WorkoutLoggingScreenState();
 }
 
-class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
+class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
+    with WidgetsBindingObserver {
   final _db = WorkoutDatabase.instance;
   late WorkoutLog _log;
 
@@ -28,6 +29,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
   int _elapsedSeconds = 0;
   Timer? _durationTimer;
   bool _paused = false;
+
+  // Wall-clock start time, adjusted whenever manual pause/resume happens
+  DateTime? _workoutStartTime;
+  // Snapshot of elapsed at the moment the user manually paused
+  int _elapsedAtPause = 0;
 
   // Accordion: which exercise is currently expanded
   String? _expandedId;
@@ -41,17 +47,15 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
   void initState() {
     super.initState();
     _log = widget.workoutLog;
+    WidgetsBinding.instance.addObserver(this);
 
     if (_log.completed) {
       // View mode — show stored duration, no running timer
       _elapsedSeconds = _log.durationSeconds ?? 0;
     } else {
-      // Active workout — start timer
-      _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-        if (!mounted || _paused) return;
-        setState(() => _elapsedSeconds++);
-      });
-      // Expand first exercise by default
+      // Active workout — anchor start time to wall clock
+      _workoutStartTime = DateTime.now();
+      _startDurationTimer();
       if (_log.exercises.isNotEmpty) {
         _expandedId = _log.exercises.first.id;
       }
@@ -61,9 +65,32 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _restTimer?.cancel();
     super.dispose();
+  }
+
+  // Restart timer from wall clock whenever app comes back to foreground
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_log.completed || _workoutStartTime == null) return;
+    if (state == AppLifecycleState.resumed && !_paused) {
+      _startDurationTimer();
+    } else if (state == AppLifecycleState.paused) {
+      _durationTimer?.cancel();
+    }
+  }
+
+  void _startDurationTimer() {
+    _durationTimer?.cancel();
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() {
+        _elapsedSeconds =
+            DateTime.now().difference(_workoutStartTime!).inSeconds;
+      });
+    });
   }
 
   Future<void> _loadDetails() async {
@@ -560,7 +587,25 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
                   color: Colors.white60,
                   size: 22,
                 ),
-                onPressed: () => setState(() => _paused = !_paused),
+                onPressed: () {
+                  setState(() {
+                    if (_paused) {
+                      // Resuming: shift start time forward by the paused duration
+                      final pausedDuration = DateTime.now()
+                          .difference(_workoutStartTime!)
+                          .inSeconds - _elapsedAtPause;
+                      _workoutStartTime = _workoutStartTime!
+                          .add(Duration(seconds: pausedDuration));
+                      _paused = false;
+                      _startDurationTimer();
+                    } else {
+                      // Pausing: snapshot current elapsed
+                      _elapsedAtPause = _elapsedSeconds;
+                      _paused = true;
+                      _durationTimer?.cancel();
+                    }
+                  });
+                },
               )
             else
               const SizedBox(width: 48),
@@ -798,99 +843,96 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
 
   Widget _buildStrengthSetRow(ExerciseLog exLog, SetLog setLog) {
     final isReadOnly = _log.completed;
-    return Dismissible(
+    return AnimatedContainer(
       key: ValueKey('set_${setLog.id}'),
-      direction: isReadOnly ? DismissDirection.none : DismissDirection.endToStart,
-      background: Container(
-        margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFE74C3C).withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: const Icon(Icons.delete_outline, color: Color(0xFFE74C3C), size: 20),
+      duration: const Duration(milliseconds: 200),
+      margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+      decoration: BoxDecoration(
+        color: setLog.isCompleted
+            ? const Color(0xFFFFD700).withValues(alpha: 0.07)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        border: setLog.isCompleted
+            ? Border.all(color: const Color(0xFFFFD700).withValues(alpha: 0.18))
+            : null,
       ),
-      onDismissed: (_) => _deleteSet(exLog, setLog),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        decoration: BoxDecoration(
-          color: setLog.isCompleted
-              ? const Color(0xFFFFD700).withValues(alpha: 0.07)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: setLog.isCompleted
-              ? Border.all(color: const Color(0xFFFFD700).withValues(alpha: 0.18))
-              : null,
-        ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 32,
-              child: Text(
-                '${setLog.setNumber}',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: setLog.isCompleted
-                      ? const Color(0xFFFFD700)
-                      : const Color(0xFF888899),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 32,
+            child: Text(
+              '${setLog.setNumber}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: setLog.isCompleted
+                    ? const Color(0xFFFFD700)
+                    : const Color(0xFF888899),
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
               ),
             ),
-            Expanded(
-              child: isReadOnly
-                  ? _ReadOnlyValue('${setLog.weight != null ? _fmtW(setLog.weight!) : '—'} kg')
-                  : _Stepper(
-                      value: setLog.weight ?? 0,
-                      step: 2.5,
-                      onChanged: (v) =>
-                          _updateSet(exLog, setLog.copyWith(weight: v.clamp(0, 999))),
-                      onTapValue: () => _editValue(
-                        'Weight (kg)',
-                        setLog.weight ?? 0,
-                        false,
-                        (v) => _updateSet(exLog, setLog.copyWith(weight: v.clamp(0, 999))),
-                      ),
+          ),
+          Expanded(
+            child: isReadOnly
+                ? _ReadOnlyValue('${setLog.weight != null ? _fmtW(setLog.weight!) : '—'} kg')
+                : _Stepper(
+                    value: setLog.weight ?? 0,
+                    step: 2.5,
+                    onChanged: (v) =>
+                        _updateSet(exLog, setLog.copyWith(weight: v.clamp(0, 999))),
+                    onTapValue: () => _editValue(
+                      'Weight (kg)',
+                      setLog.weight ?? 0,
+                      false,
+                      (v) => _updateSet(exLog, setLog.copyWith(weight: v.clamp(0, 999))),
                     ),
-            ),
-            Expanded(
-              child: isReadOnly
-                  ? _ReadOnlyValue('${setLog.reps ?? '—'} reps')
-                  : _Stepper(
-                      value: (setLog.reps ?? 0).toDouble(),
-                      step: 1,
-                      isInt: true,
-                      onChanged: (v) =>
-                          _updateSet(exLog, setLog.copyWith(reps: v.clamp(0, 999).toInt())),
-                      onTapValue: () => _editValue(
-                        'Reps',
-                        (setLog.reps ?? 0).toDouble(),
-                        true,
-                        (v) => _updateSet(exLog, setLog.copyWith(reps: v.clamp(0, 999).toInt())),
-                      ),
+                  ),
+          ),
+          Expanded(
+            child: isReadOnly
+                ? _ReadOnlyValue('${setLog.reps ?? '—'} reps')
+                : _Stepper(
+                    value: (setLog.reps ?? 0).toDouble(),
+                    step: 1,
+                    isInt: true,
+                    onChanged: (v) =>
+                        _updateSet(exLog, setLog.copyWith(reps: v.clamp(0, 999).toInt())),
+                    onTapValue: () => _editValue(
+                      'Reps',
+                      (setLog.reps ?? 0).toDouble(),
+                      true,
+                      (v) => _updateSet(exLog, setLog.copyWith(reps: v.clamp(0, 999).toInt())),
                     ),
+                  ),
+          ),
+          GestureDetector(
+            onTap: isReadOnly ? null : () => _toggleCheck(exLog, setLog),
+            child: SizedBox(
+              width: 36,
+              child: Icon(
+                setLog.isCompleted
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                color: setLog.isCompleted
+                    ? const Color(0xFFFFD700)
+                    : const Color(0xFF333355),
+                size: 22,
+              ),
             ),
+          ),
+          if (!isReadOnly)
             GestureDetector(
-              onTap: isReadOnly ? null : () => _toggleCheck(exLog, setLog),
-              child: SizedBox(
-                width: 40,
-                child: Icon(
-                  setLog.isCompleted
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  color: setLog.isCompleted
-                      ? const Color(0xFFFFD700)
-                      : const Color(0xFF333355),
-                  size: 22,
-                ),
+              onTap: () => _deleteSet(exLog, setLog),
+              child: const SizedBox(
+                width: 32,
+                child: Icon(Icons.delete_outline,
+                    color: Color(0xFF555566), size: 18),
               ),
-            ),
-          ],
-        ),
+            )
+          else
+            const SizedBox(width: 32),
+        ],
       ),
     );
   }
@@ -964,47 +1006,34 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
 
     bool hasF2 = f2Val.isNotEmpty;
 
-    return Dismissible(
+    return AnimatedContainer(
       key: ValueKey('set_${setLog.id}'),
-      direction: isReadOnly ? DismissDirection.none : DismissDirection.endToStart,
-      background: Container(
-        margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
-        alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFE74C3C).withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: const Icon(Icons.delete_outline, color: Color(0xFFE74C3C), size: 20),
+      duration: const Duration(milliseconds: 200),
+      margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+      decoration: BoxDecoration(
+        color: setLog.isCompleted
+            ? const Color(0xFF3498DB).withValues(alpha: 0.07)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        border: setLog.isCompleted
+            ? Border.all(color: const Color(0xFF3498DB).withValues(alpha: 0.2))
+            : null,
       ),
-      onDismissed: (_) => _deleteSet(exLog, setLog),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.fromLTRB(10, 2, 10, 2),
-        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-        decoration: BoxDecoration(
-          color: setLog.isCompleted
-              ? const Color(0xFF3498DB).withValues(alpha: 0.07)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-          border: setLog.isCompleted
-              ? Border.all(color: const Color(0xFF3498DB).withValues(alpha: 0.2))
-              : null,
-        ),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 32,
-              child: Text(
-                '${setLog.setNumber}',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: setLog.isCompleted ? const Color(0xFF3498DB) : const Color(0xFF888899),
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 32,
+            child: Text(
+              '${setLog.setNumber}',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: setLog.isCompleted ? const Color(0xFF3498DB) : const Color(0xFF888899),
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
               ),
             ),
+          ),
             // Duration
             Expanded(
               child: GestureDetector(
@@ -1058,7 +1087,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
             GestureDetector(
               onTap: isReadOnly ? null : () => _toggleCheck(exLog, setLog),
               child: SizedBox(
-                width: 40,
+                width: 36,
                 child: Icon(
                   setLog.isCompleted
                       ? Icons.check_circle_rounded
@@ -1070,9 +1099,19 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen> {
                 ),
               ),
             ),
+            if (!isReadOnly)
+              GestureDetector(
+                onTap: () => _deleteSet(exLog, setLog),
+                child: const SizedBox(
+                  width: 32,
+                  child: Icon(Icons.delete_outline,
+                      color: Color(0xFF555566), size: 18),
+                ),
+              )
+            else
+              const SizedBox(width: 32),
           ],
         ),
-      ),
     );
   }
 
