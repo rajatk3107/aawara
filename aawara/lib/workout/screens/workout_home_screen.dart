@@ -11,7 +11,10 @@ import 'exercise_library_screen.dart';
 import 'progress_screen.dart';
 import 'workout_history_screen.dart';
 import 'quick_start_screen.dart';
+import 'achievements_screen.dart';
+import 'monthly_summary_screen.dart';
 import '../../notes/notes_list_screen.dart';
+import '../../settings_screen.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -38,6 +41,13 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   // Week strip
   Map<int, WorkoutPlanDay?> _weekPlanDays = {};
   Set<String> _weekCompletedDates = {};
+
+  // Wellness check-in
+  bool _showWellnessCard = false;
+  double _wellnessSleep = 7.5;
+  int _wellnessEnergy = 3;
+  int _wellnessSoreness = 2;
+  bool _loggingWellness = false;
 
   bool _loading = true;
 
@@ -78,6 +88,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final weekSunday = weekMonday.add(const Duration(days: 6));
       final weekFrom = _fmt(weekMonday);
       final weekTo = _fmt(weekSunday);
+      final todayStr = _fmt(now);
 
       final results = await Future.wait([
         _db.getPlanDayForWeekday(_selectedDate.weekday),
@@ -88,6 +99,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         _db.getLatestBodyWeight(),
         _db.getWorkoutPlan(),
         _db.getCompletedWorkoutDatesInRange(weekFrom, weekTo),
+        _db.getWellnessForDate(todayStr),
       ]);
 
       final planDay = results[0] as WorkoutPlanDay?;
@@ -98,6 +110,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final weight = results[5] as double?;
       final allPlanDays = results[6] as List<WorkoutPlanDay>;
       final completedDates = results[7] as Set<String>;
+      final todayWellness = results[8] as Map<String, dynamic>?;
 
       final weekMap = <int, WorkoutPlanDay?>{};
       for (int i = 1; i <= 7; i++) {
@@ -129,8 +142,40 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _weekPlanDays = weekMap;
           _weekCompletedDates = completedDates;
           _userGoal = userGoal;
+          _showWellnessCard = todayWellness == null;
           _loading = false;
         });
+
+        // Monthly summary — show once on first open of a new month
+        final currentMonth =
+            '${now.year}-${now.month.toString().padLeft(2, '0')}';
+        final lastShown = prefs.getString('last_summary_shown_month') ?? '';
+        if (lastShown != currentMonth) {
+          await prefs.setString('last_summary_shown_month', currentMonth);
+          final prevMonth = now.month == 1 ? 12 : now.month - 1;
+          final prevYear = now.month == 1 ? now.year - 1 : now.year;
+          final summary = await _db.getMonthlySummary(prevYear, prevMonth);
+          if ((summary['total_sessions'] as int) > 0 && mounted) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => MonthlySummaryScreen(
+                        year: prevYear, month: prevMonth),
+                  ),
+                );
+              }
+            });
+          }
+        }
+
+        // Achievement check
+        final newAchievements =
+            await _db.checkAndUnlockAchievements();
+        for (final id in newAchievements) {
+          if (mounted) await showAchievementCelebration(context, id);
+        }
       }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -443,6 +488,12 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                             child: _buildStatsStrip())),
+                    if (_showWellnessCard)
+                      SliverToBoxAdapter(
+                          child: Padding(
+                              padding:
+                                  const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                              child: _buildWellnessCard())),
                     SliverToBoxAdapter(
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
@@ -517,6 +568,24 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
+                        builder: (_) => const SettingsScreen())),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A2E),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFF1E1E35)),
+                  ),
+                  child: const Icon(Icons.settings_rounded,
+                      color: Colors.white54, size: 20),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
                         builder: (_) => const NotesListScreen())),
                 child: Container(
                   width: 40,
@@ -531,24 +600,30 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFFFFD700), Color(0xFFB8860B)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+              GestureDetector(
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const AchievementsScreen())),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFFFFD700), Color(0xFFB8860B)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
                   ),
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Text(
-                    'A',
-                    style: TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16),
+                  child: const Center(
+                    child: Text(
+                      'A',
+                      style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16),
+                    ),
                   ),
                 ),
               ),
@@ -1095,6 +1170,133 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     );
   }
 
+  // ─── Wellness Check-in Card ──────────────────────────────────────────────────
+
+  Future<void> _logWellness() async {
+    setState(() => _loggingWellness = true);
+    final today = _fmt(DateTime.now());
+    await _db.logWellness(
+      date: today,
+      sleepHours: _wellnessSleep,
+      energy: _wellnessEnergy,
+      soreness: _wellnessSoreness,
+    );
+    if (mounted) setState(() { _showWellnessCard = false; _loggingWellness = false; });
+  }
+
+  Widget _buildWellnessCard() {
+    const energyEmojis = ['😴', '😕', '😐', '🙂', '⚡'];
+    const sorenessColors = [
+      Color(0xFF2ECC71),
+      Color(0xFF8CC152),
+      Color(0xFFF1C40F),
+      Color(0xFFE67E22),
+      Color(0xFFE74C3C),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Row(
+        children: [
+          // Sleep stepper
+          _WellnessLabel('😴'),
+          const SizedBox(width: 3),
+          GestureDetector(
+            onTap: () => setState(() {
+              if (_wellnessSleep > 5.0) _wellnessSleep -= 0.5;
+            }),
+            child: const Icon(Icons.remove_rounded,
+                color: Color(0xFF555577), size: 16),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            _wellnessSleep.toStringAsFixed(1),
+            style: const TextStyle(
+                color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 4),
+          GestureDetector(
+            onTap: () => setState(() {
+              if (_wellnessSleep < 10.0) _wellnessSleep += 0.5;
+            }),
+            child: const Icon(Icons.add_rounded,
+                color: Color(0xFF555577), size: 16),
+          ),
+          const SizedBox(width: 10),
+          // Energy
+          _WellnessLabel('⚡'),
+          const SizedBox(width: 4),
+          ...List.generate(5, (i) {
+            final sel = _wellnessEnergy == i + 1;
+            return GestureDetector(
+              onTap: () => setState(() => _wellnessEnergy = i + 1),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 2),
+                child: Text(
+                  energyEmojis[i],
+                  style: TextStyle(
+                      fontSize: sel ? 17 : 13,
+                      color: sel ? null : const Color(0xFF555577)),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(width: 10),
+          // Soreness
+          _WellnessLabel('🦴'),
+          const SizedBox(width: 4),
+          ...List.generate(5, (i) {
+            final sel = _wellnessSoreness == i + 1;
+            return GestureDetector(
+              onTap: () => setState(() => _wellnessSoreness = i + 1),
+              child: Padding(
+                padding: const EdgeInsets.only(right: 3),
+                child: Container(
+                  width: sel ? 10 : 7,
+                  height: sel ? 10 : 7,
+                  decoration: BoxDecoration(
+                    color: sel
+                        ? sorenessColors[i]
+                        : sorenessColors[i].withValues(alpha: 0.25),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            );
+          }),
+          const Spacer(),
+          // Log button
+          GestureDetector(
+            onTap: _loggingWellness ? null : _logWellness,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFD700),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: _loggingWellness
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.black))
+                  : const Text('Log',
+                      style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─── Quick Access ─────────────────────────────────────────────────────────────
 
   Widget _buildQuickAccess() {
@@ -1147,6 +1349,14 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       ],
     );
   }
+}
+
+class _WellnessLabel extends StatelessWidget {
+  final String emoji;
+  const _WellnessLabel(this.emoji);
+  @override
+  Widget build(BuildContext context) =>
+      Text(emoji, style: const TextStyle(fontSize: 13));
 }
 
 // ─── Data classes ─────────────────────────────────────────────────────────────

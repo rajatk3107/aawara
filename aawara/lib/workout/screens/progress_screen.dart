@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
+import '../widgets/empty_state_widget.dart';
 import 'exercise_progress_screen.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
@@ -31,6 +32,7 @@ class _ProgressScreenState extends State<ProgressScreen>
 
   // Body weight tab
   List<Map<String, dynamic>> _weightData = [];
+  List<Map<String, dynamic>> _wellnessData = [];
   bool _weightLoading = false;
   _Interval _weightInterval = _Interval.all;
   DateTime? _weightCustomFrom;
@@ -78,9 +80,19 @@ class _ProgressScreenState extends State<ProgressScreen>
 
   Future<void> _loadWeightData() async {
     setState(() => _weightLoading = true);
-    final data = await _db.getBodyWeightLogs(
-        fromDate: _weightFromDate(), toDate: _weightToDate());
-    if (mounted) setState(() { _weightData = data; _weightLoading = false; });
+    final results = await Future.wait([
+      _db.getBodyWeightLogs(
+          fromDate: _weightFromDate(), toDate: _weightToDate()),
+      _db.getWellnessLogs(
+          fromDate: _weightFromDate(), toDate: _weightToDate()),
+    ]);
+    if (mounted) {
+      setState(() {
+        _weightData = results[0];
+        _wellnessData = results[1];
+        _weightLoading = false;
+      });
+    }
   }
 
   String? _weightFromDate() {
@@ -336,6 +348,12 @@ class _ProgressScreenState extends State<ProgressScreen>
         _buildWeightIntervalChips(),
         const SizedBox(height: 16),
         _buildWeightChart(),
+        if (_wellnessData.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _buildSectionHeader('Wellness Trends'),
+          const SizedBox(height: 8),
+          _buildWellnessChart(),
+        ],
         if (_weightData.length > 1) ...[
           const SizedBox(height: 24),
           _buildSectionHeader('Weight Log'),
@@ -343,6 +361,10 @@ class _ProgressScreenState extends State<ProgressScreen>
           ..._weightData.reversed.take(20).map((row) {
             final date = row['date'] as String;
             final wt = (row['weight_kg'] as num).toDouble();
+            // Find matching wellness
+            final w = _wellnessData.where((r) => r['date'] == date).firstOrNull;
+            final energyEmojis = ['😴', '😕', '😐', '🙂', '⚡'];
+            final energy = w != null ? (w['energy'] as int) : null;
             return Container(
               margin: const EdgeInsets.only(bottom: 8),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -358,6 +380,11 @@ class _ProgressScreenState extends State<ProgressScreen>
                   Text(_fmtDate(date),
                       style: const TextStyle(color: Colors.white60, fontSize: 13)),
                   const Spacer(),
+                  if (energy != null) ...[
+                    Text(energyEmojis[energy - 1],
+                        style: const TextStyle(fontSize: 14)),
+                    const SizedBox(width: 8),
+                  ],
                   Text('${wt.toStringAsFixed(1)} kg',
                       style: const TextStyle(
                           color: Color(0xFF3498DB),
@@ -372,6 +399,142 @@ class _ProgressScreenState extends State<ProgressScreen>
       ],
     );
   }
+
+  Widget _buildWellnessChart() {
+    // Build date-indexed maps for energy and soreness
+    final energyMap = <String, double>{};
+    final sorenessMap = <String, double>{};
+    for (final r in _wellnessData) {
+      final date = r['date'] as String;
+      energyMap[date] = (r['energy'] as int).toDouble();
+      sorenessMap[date] = (r['soreness'] as int).toDouble();
+    }
+
+    // Use union of all dates (wellness only; weight dates add no new x-axis for this chart)
+    final dates = _wellnessData.map((r) => r['date'] as String).toList()
+      ..sort();
+    if (dates.isEmpty) return const SizedBox.shrink();
+
+    final energySpots = <FlSpot>[];
+    final sorenessSpots = <FlSpot>[];
+    final dateLabels = <double, String>{};
+
+    for (int i = 0; i < dates.length; i++) {
+      final d = dates[i];
+      dateLabels[i.toDouble()] = d;
+      if (energyMap.containsKey(d)) {
+        energySpots.add(FlSpot(i.toDouble(), energyMap[d]!));
+      }
+      if (sorenessMap.containsKey(d)) {
+        sorenessSpots.add(FlSpot(i.toDouble(), sorenessMap[d]!));
+      }
+    }
+
+    return Container(
+      height: 180,
+      padding: const EdgeInsets.fromLTRB(8, 16, 16, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _wellnessLegendDot(const Color(0xFF2ECC71)),
+              const SizedBox(width: 4),
+              const Text('Energy', style: TextStyle(color: Color(0xFF888899), fontSize: 10)),
+              const SizedBox(width: 12),
+              _wellnessLegendDot(const Color(0xFFE74C3C)),
+              const SizedBox(width: 4),
+              const Text('Soreness', style: TextStyle(color: Color(0xFF888899), fontSize: 10)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                minX: 0,
+                maxX: (dates.length - 1).toDouble(),
+                minY: 0.5,
+                maxY: 5.5,
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 24,
+                      interval: 1,
+                      getTitlesWidget: (v, _) => Text('${v.toInt()}',
+                          style: const TextStyle(
+                              color: Color(0xFF555577), fontSize: 9)),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 24,
+                      interval: dates.length > 5
+                          ? (dates.length / 4).roundToDouble()
+                          : 1,
+                      getTitlesWidget: (v, _) {
+                        final d = dateLabels[v];
+                        if (d == null) return const SizedBox.shrink();
+                        try {
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              DateFormat('d/M').format(DateTime.parse(d)),
+                              style: const TextStyle(
+                                  color: Color(0xFF888899), fontSize: 9),
+                            ),
+                          );
+                        } catch (_) {
+                          return const SizedBox.shrink();
+                        }
+                      },
+                    ),
+                  ),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                ),
+                lineBarsData: [
+                  if (energySpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: energySpots,
+                      isCurved: true,
+                      curveSmoothness: 0.3,
+                      color: const Color(0xFF2ECC71),
+                      barWidth: 2,
+                      dotData: const FlDotData(show: false),
+                    ),
+                  if (sorenessSpots.isNotEmpty)
+                    LineChartBarData(
+                      spots: sorenessSpots,
+                      isCurved: true,
+                      curveSmoothness: 0.3,
+                      color: const Color(0xFFE74C3C),
+                      barWidth: 2,
+                      dotData: const FlDotData(show: false),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _wellnessLegendDot(Color color) => Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      );
 
   Widget _buildWeightIntervalChips() {
     final chips = [
@@ -441,20 +604,10 @@ class _ProgressScreenState extends State<ProgressScreen>
           color: const Color(0xFF1A1A2E),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.monitor_weight_outlined,
-                  color: Color(0xFF333355), size: 48),
-              SizedBox(height: 12),
-              Text('No weight logged yet',
-                  style: TextStyle(color: Color(0xFF888899), fontSize: 14)),
-              SizedBox(height: 4),
-              Text('Tap the weight card on the home screen to log',
-                  style: TextStyle(color: Color(0xFF555566), fontSize: 12)),
-            ],
-          ),
+        child: const EmptyStateWidget(
+          icon: Icons.monitor_weight_outlined,
+          title: 'No weight entries yet',
+          subtitle: 'Tap + to log today\'s weight and start tracking your trend',
         ),
       );
     }
@@ -694,19 +847,10 @@ class _ProgressScreenState extends State<ProgressScreen>
           color: const Color(0xFF1A1A2E),
           borderRadius: BorderRadius.circular(16),
         ),
-        child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.bar_chart_outlined, color: Color(0xFF333355), size: 48),
-              SizedBox(height: 12),
-              Text('No data for this period',
-                  style: TextStyle(color: Color(0xFF888899), fontSize: 14)),
-              SizedBox(height: 4),
-              Text('Complete workouts to see progress',
-                  style: TextStyle(color: Color(0xFF555566), fontSize: 12)),
-            ],
-          ),
+        child: const EmptyStateWidget(
+          icon: Icons.bar_chart_rounded,
+          title: 'Nothing to show yet',
+          subtitle: 'Log a few workouts and your progress will appear here',
         ),
       );
     }

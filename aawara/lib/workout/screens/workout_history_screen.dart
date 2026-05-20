@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../database/workout_database.dart';
 import '../models/workout_log.dart';
+import '../widgets/empty_state_widget.dart';
 import 'export_screen.dart';
 import 'workout_logging_screen.dart';
 
@@ -122,24 +123,10 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
   }
 
   Widget _buildEmpty() {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.history, color: Color(0xFF333355), size: 64),
-          SizedBox(height: 16),
-          Text('No workouts yet',
-              style: TextStyle(
-                  color: Color(0xFF888899),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-          SizedBox(height: 8),
-          Text('Complete your first workout to\nsee it here!',
-              textAlign: TextAlign.center,
-              style:
-                  TextStyle(color: Color(0xFF555566), fontSize: 13)),
-        ],
-      ),
+    return const EmptyStateWidget(
+      icon: Icons.history_rounded,
+      title: 'No workouts yet',
+      subtitle: 'Complete your first workout to see it here',
     );
   }
 }

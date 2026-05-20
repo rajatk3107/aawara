@@ -23,7 +23,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 5,
+      version: 7,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -34,6 +34,37 @@ class WorkoutDatabase {
     if (oldVersion < 3) await _addBodyWeightTable(db);
     if (oldVersion < 4) await _addQuickStartTemplatesTable(db);
     if (oldVersion < 5) await _migrateV5(db);
+    if (oldVersion < 6) await _migrateV6(db);
+    if (oldVersion < 7) await _migrateV7(db);
+  }
+
+  Future<void> _migrateV7(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS wellness_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE,
+        sleep_hours REAL NOT NULL,
+        energy INTEGER NOT NULL,
+        soreness INTEGER NOT NULL,
+        notes TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS achievements_unlocked (
+        achievement_id TEXT PRIMARY KEY,
+        unlocked_at TEXT NOT NULL
+      )
+    ''');
+  }
+
+  Future<void> _migrateV6(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS exercise_prs (
+        exercise_id TEXT PRIMARY KEY,
+        best_1rm REAL NOT NULL,
+        date TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<void> _migrateV5(Database db) async {
@@ -195,6 +226,32 @@ class WorkoutDatabase {
       CREATE TABLE quick_start_templates (
         name TEXT PRIMARY KEY,
         exercise_ids_json TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE exercise_prs (
+        exercise_id TEXT PRIMARY KEY,
+        best_1rm REAL NOT NULL,
+        date TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE wellness_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE,
+        sleep_hours REAL NOT NULL,
+        energy INTEGER NOT NULL,
+        soreness INTEGER NOT NULL,
+        notes TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE achievements_unlocked (
+        achievement_id TEXT PRIMARY KEY,
+        unlocked_at TEXT NOT NULL
       )
     ''');
 
@@ -675,6 +732,50 @@ class WorkoutDatabase {
   }
 
   // ─── PROGRESS / ANALYTICS ───────────────────────────────────────────────────
+
+  /// Returns sets grouped by session for the last [n] completed sessions
+  /// that included this exercise, newest session first.
+  Future<List<List<SetLog>>> getLastNSessionsForExercise(
+      String exerciseId, int n) async {
+    final db = await database;
+    final sessions = await db.rawQuery('''
+      SELECT DISTINCT wl.id
+      FROM workout_logs wl
+      INNER JOIN exercise_logs el ON el.workout_log_id = wl.id
+      WHERE el.exercise_id = ? AND wl.completed = 1
+      ORDER BY wl.date DESC
+      LIMIT ?
+    ''', [exerciseId, n]);
+    final result = <List<SetLog>>[];
+    for (final session in sessions) {
+      final setMaps = await db.rawQuery('''
+        SELECT sl.* FROM set_logs sl
+        INNER JOIN exercise_logs el ON sl.exercise_log_id = el.id
+        WHERE el.workout_log_id = ? AND el.exercise_id = ?
+        ORDER BY sl.set_number ASC
+      ''', [session['id'], exerciseId]);
+      result.add(setMaps.map(SetLog.fromMap).toList());
+    }
+    return result;
+  }
+
+  Future<double?> getBest1RM(String exerciseId) async {
+    final db = await database;
+    final rows = await db.query('exercise_prs',
+        where: 'exercise_id = ?', whereArgs: [exerciseId], limit: 1);
+    if (rows.isEmpty) return null;
+    return (rows.first['best_1rm'] as num).toDouble();
+  }
+
+  Future<void> updateBest1RM(
+      String exerciseId, double orm, String date) async {
+    final db = await database;
+    await db.insert(
+      'exercise_prs',
+      {'exercise_id': exerciseId, 'best_1rm': orm, 'date': date},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
 
   /// Returns the last completed sets for an exercise, most recent first.
   Future<List<SetLog>> getLastSetsForExercise(String exerciseId,
@@ -1293,6 +1394,299 @@ class WorkoutDatabase {
     }
 
     return (imported: imported, skipped: skipped);
+  }
+
+  // ─── MONTHLY SUMMARY ────────────────────────────────────────────────────────
+
+  Future<Map<String, dynamic>> getMonthlySummary(int year, int month) async {
+    final db = await database;
+    final monthStart =
+        '$year-${month.toString().padLeft(2, '0')}-01';
+    final lastDay = DateTime(year, month + 1, 0).day;
+    final monthEnd =
+        '$year-${month.toString().padLeft(2, '0')}-${lastDay.toString().padLeft(2, '0')}';
+
+    final prevMonth = month == 1 ? 12 : month - 1;
+    final prevYear = month == 1 ? year - 1 : year;
+    final prevMonthStart =
+        '$prevYear-${prevMonth.toString().padLeft(2, '0')}-01';
+    final prevLastDay = DateTime(prevYear, prevMonth + 1, 0).day;
+    final prevMonthEnd =
+        '$prevYear-${prevMonth.toString().padLeft(2, '0')}-${prevLastDay.toString().padLeft(2, '0')}';
+
+    final sessionsResult = await db.rawQuery(
+      'SELECT COUNT(*) as cnt FROM workout_logs WHERE completed = 1 AND date >= ? AND date <= ?',
+      [monthStart, monthEnd],
+    );
+    final totalSessions = (sessionsResult.first['cnt'] as int?) ?? 0;
+
+    final volumeResult = await db.rawQuery('''
+      SELECT SUM(COALESCE(sl.weight, 0) * COALESCE(sl.reps, 0)) as vol
+      FROM set_logs sl
+      INNER JOIN exercise_logs el ON sl.exercise_log_id = el.id
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      WHERE wl.completed = 1 AND wl.date >= ? AND wl.date <= ?
+    ''', [monthStart, monthEnd]);
+    final totalVolume = (volumeResult.first['vol'] as num?)?.toDouble() ?? 0.0;
+
+    final prevVolumeResult = await db.rawQuery('''
+      SELECT SUM(COALESCE(sl.weight, 0) * COALESCE(sl.reps, 0)) as vol
+      FROM set_logs sl
+      INNER JOIN exercise_logs el ON sl.exercise_log_id = el.id
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      WHERE wl.completed = 1 AND wl.date >= ? AND wl.date <= ?
+    ''', [prevMonthStart, prevMonthEnd]);
+    final prevVolume =
+        (prevVolumeResult.first['vol'] as num?)?.toDouble() ?? 0.0;
+
+    final prRows = await db.rawQuery('''
+      SELECT e.name,
+             MAX(CASE WHEN wl.date < ? THEN
+               sl.weight * (1.0 + COALESCE(sl.reps, 0) / 30.0) ELSE NULL END) as old_1rm,
+             MAX(CASE WHEN wl.date >= ? AND wl.date <= ? THEN
+               sl.weight * (1.0 + COALESCE(sl.reps, 0) / 30.0) ELSE NULL END) as new_1rm
+      FROM exercise_logs el
+      INNER JOIN set_logs sl ON sl.exercise_log_id = el.id
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      INNER JOIN exercises e ON el.exercise_id = e.id
+      WHERE wl.completed = 1 AND sl.weight IS NOT NULL AND sl.reps IS NOT NULL AND sl.reps > 0
+      GROUP BY el.exercise_id, e.name
+      HAVING new_1rm IS NOT NULL AND (old_1rm IS NULL OR new_1rm > old_1rm)
+      ORDER BY (new_1rm - COALESCE(old_1rm, 0)) DESC
+      LIMIT 3
+    ''', [monthStart, monthStart, monthEnd]);
+
+    final topPRs = prRows.map((r) => {
+          'name': r['name'] as String,
+          'old_1rm': (r['old_1rm'] as num?)?.toDouble(),
+          'new_1rm': (r['new_1rm'] as num).toDouble(),
+        }).toList();
+
+    final muscleRows = await db.rawQuery('''
+      SELECT e.muscle_group, COUNT(sl.id) as set_count
+      FROM exercise_logs el
+      INNER JOIN set_logs sl ON sl.exercise_log_id = el.id
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      INNER JOIN exercises e ON el.exercise_id = e.id
+      WHERE wl.completed = 1 AND wl.date >= ? AND wl.date <= ?
+      GROUP BY e.muscle_group
+      ORDER BY set_count DESC
+      LIMIT 1
+    ''', [monthStart, monthEnd]);
+    final topMuscleGroup = muscleRows.isEmpty
+        ? null
+        : muscleRows.first['muscle_group'] as String;
+
+    final bwFirst = await db.rawQuery(
+      'SELECT weight_kg FROM body_weight_logs WHERE date >= ? AND date <= ? ORDER BY date ASC LIMIT 1',
+      [monthStart, monthEnd],
+    );
+    final bwLast = await db.rawQuery(
+      'SELECT weight_kg FROM body_weight_logs WHERE date >= ? AND date <= ? ORDER BY date DESC LIMIT 1',
+      [monthStart, monthEnd],
+    );
+    final bwFirstVal =
+        bwFirst.isEmpty ? null : (bwFirst.first['weight_kg'] as num).toDouble();
+    final bwLastVal =
+        bwLast.isEmpty ? null : (bwLast.first['weight_kg'] as num).toDouble();
+
+    final dateRows = await db.rawQuery(
+      'SELECT date FROM workout_logs WHERE completed = 1 AND date >= ? AND date <= ? ORDER BY date ASC',
+      [monthStart, monthEnd],
+    );
+    final dates = dateRows.map((r) => r['date'] as String).toSet();
+    int longestStreak = 0;
+    int currentStreak = 0;
+    for (int d = 1; d <= lastDay; d++) {
+      final ds =
+          '$year-${month.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+      if (dates.contains(ds)) {
+        currentStreak++;
+        if (currentStreak > longestStreak) longestStreak = currentStreak;
+      } else {
+        currentStreak = 0;
+      }
+    }
+
+    return {
+      'total_sessions': totalSessions,
+      'total_volume': totalVolume,
+      'prev_volume': prevVolume,
+      'top_prs': topPRs,
+      'top_muscle_group': topMuscleGroup,
+      'bw_first': bwFirstVal,
+      'bw_last': bwLastVal,
+      'longest_streak': longestStreak,
+    };
+  }
+
+  // ─── WELLNESS LOGS ──────────────────────────────────────────────────────────
+
+  Future<void> logWellness({
+    required String date,
+    required double sleepHours,
+    required int energy,
+    required int soreness,
+    String? notes,
+  }) async {
+    const uuid = Uuid();
+    final db = await database;
+    final existing = await db.query('wellness_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (existing.isNotEmpty) {
+      await db.update(
+        'wellness_logs',
+        {
+          'sleep_hours': sleepHours,
+          'energy': energy,
+          'soreness': soreness,
+          'notes': notes,
+        },
+        where: 'date = ?',
+        whereArgs: [date],
+      );
+    } else {
+      await db.insert('wellness_logs', {
+        'id': uuid.v4(),
+        'date': date,
+        'sleep_hours': sleepHours,
+        'energy': energy,
+        'soreness': soreness,
+        'notes': notes,
+      });
+    }
+  }
+
+  Future<Map<String, dynamic>?> getWellnessForDate(String date) async {
+    final db = await database;
+    final rows = await db.query('wellness_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (rows.isEmpty) return null;
+    return Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<List<Map<String, dynamic>>> getWellnessLogs(
+      {String? fromDate, String? toDate}) async {
+    final db = await database;
+    final where = StringBuffer('1=1');
+    final args = <dynamic>[];
+    if (fromDate != null) {
+      where.write(' AND date >= ?');
+      args.add(fromDate);
+    }
+    if (toDate != null) {
+      where.write(' AND date <= ?');
+      args.add(toDate);
+    }
+    return db.rawQuery(
+      'SELECT date, sleep_hours, energy, soreness FROM wellness_logs WHERE ${where.toString()} ORDER BY date ASC',
+      args,
+    );
+  }
+
+  // ─── ACHIEVEMENTS ────────────────────────────────────────────────────────────
+
+  Future<Map<String, String>> getUnlockedAchievements() async {
+    final db = await database;
+    final rows = await db.query('achievements_unlocked');
+    return {
+      for (final r in rows)
+        r['achievement_id'] as String: r['unlocked_at'] as String
+    };
+  }
+
+  Future<void> markAchievementUnlocked(String achievementId) async {
+    final db = await database;
+    await db.insert(
+      'achievements_unlocked',
+      {
+        'achievement_id': achievementId,
+        'unlocked_at': _fmt(DateTime.now()),
+      },
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  /// Computes all achievement-related stats and marks newly unlocked ones.
+  /// Returns IDs of achievements that were just unlocked this call.
+  Future<List<String>> checkAndUnlockAchievements({int notesCount = 0}) async {
+    final db = await database;
+
+    final totalWorkouts = Sqflite.firstIntValue(await db.rawQuery(
+          'SELECT COUNT(*) FROM workout_logs WHERE completed = 1',
+        )) ??
+        0;
+
+    final volumeRow = await db.rawQuery('''
+      SELECT SUM(COALESCE(sl.weight, 0) * COALESCE(sl.reps, 0)) as vol
+      FROM set_logs sl
+      INNER JOIN exercise_logs el ON sl.exercise_log_id = el.id
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      WHERE wl.completed = 1
+    ''');
+    final totalVolume =
+        (volumeRow.first['vol'] as num?)?.toDouble() ?? 0.0;
+
+    final prCount = Sqflite.firstIntValue(await db.rawQuery(
+          'SELECT COUNT(*) FROM exercise_prs',
+        )) ??
+        0;
+
+    final legWorkouts = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(DISTINCT wl.id) FROM workout_logs wl
+      INNER JOIN exercise_logs el ON el.workout_log_id = wl.id
+      INNER JOIN exercises e ON el.exercise_id = e.id
+      WHERE wl.completed = 1 AND e.muscle_group = 'Legs'
+    ''')) ??
+        0;
+
+    final streak = await getWorkoutStreak();
+    final consistent = await _checkConsistentFourWeeks(db);
+
+    final workoutNoteCount = Sqflite.firstIntValue(await db.rawQuery(
+          "SELECT COUNT(*) FROM workout_logs WHERE completed = 1 AND notes IS NOT NULL AND notes != ''",
+        )) ??
+        0;
+    final totalNotes = workoutNoteCount + notesCount;
+
+    final conditions = <String, bool>{
+      'first_rep': totalWorkouts >= 1,
+      'week_warrior': streak >= 7,
+      'century_club': totalWorkouts >= 100,
+      'ten_k_club': totalVolume >= 10000,
+      'pr_machine': prCount >= 10,
+      'consistent': consistent,
+      'leg_day_hero': legWorkouts >= 20,
+      'note_taker': totalNotes >= 10,
+    };
+
+    final already = await getUnlockedAchievements();
+    final newlyUnlocked = <String>[];
+
+    for (final entry in conditions.entries) {
+      if (entry.value && !already.containsKey(entry.key)) {
+        await markAchievementUnlocked(entry.key);
+        newlyUnlocked.add(entry.key);
+      }
+    }
+
+    return newlyUnlocked;
+  }
+
+  Future<bool> _checkConsistentFourWeeks(Database db) async {
+    final now = DateTime.now();
+    final monday = now.subtract(Duration(days: now.weekday - 1));
+    for (int week = 1; week <= 4; week++) {
+      final weekStart = monday.subtract(Duration(days: 7 * week));
+      final weekEnd = weekStart.add(const Duration(days: 6));
+      final count = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM workout_logs WHERE completed = 1 AND date >= ? AND date <= ?',
+            [_fmt(weekStart), _fmt(weekEnd)],
+          )) ??
+          0;
+      if (count < 3) return false;
+    }
+    return true;
   }
 
   Future<void> close() async {

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
+import '../widgets/empty_state_widget.dart';
 import '../widgets/muscle_group_filter.dart';
 import 'exercise_progress_detail_screen.dart';
 
@@ -125,26 +126,18 @@ class _ExerciseProgressScreenState extends State<ExerciseProgressScreen> {
   }
 
   Widget _buildEmpty() {
-    return ListView(
-      padding: const EdgeInsets.all(32),
-      children: [
-        const SizedBox(height: 60),
-        const Icon(Icons.show_chart_rounded,
-            color: Color(0xFF333355), size: 64),
-        const SizedBox(height: 16),
-        const Text(
-          'No exercise data yet',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-              color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+    return LayoutBuilder(
+      builder: (_, constraints) => SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: SizedBox(
+          height: constraints.maxHeight,
+          child: const EmptyStateWidget(
+            icon: Icons.fitness_center_rounded,
+            title: 'No history for this exercise',
+            subtitle: 'Start logging sets and your progress will show up here',
+          ),
         ),
-        const SizedBox(height: 8),
-        const Text(
-          'Complete workouts and log sets to see\nyour progress tracked here.',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Color(0xFF888899), fontSize: 13),
-        ),
-      ],
+      ),
     );
   }
 

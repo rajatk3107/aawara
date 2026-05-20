@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'note_model.dart';
 import 'notes_database.dart';
 import 'note_editor_screen.dart';
+import '../workout/widgets/empty_state_widget.dart';
 
 class NotesListScreen extends StatefulWidget {
   const NotesListScreen({super.key});
@@ -454,23 +455,12 @@ class _NotesListScreenState extends State<NotesListScreen> {
 
   Widget _buildNotesList() {
     if (_notes.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.note_outlined,
-                color: Color(0xFF444455), size: 64),
-            const SizedBox(height: 16),
-            Text(
-              _searchQuery.isNotEmpty
-                  ? 'No notes match your search'
-                  : 'No notes yet\nTap + to create one',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  color: Color(0xFF888899), fontSize: 16, height: 1.6),
-            ),
-          ],
-        ),
+      return EmptyStateWidget(
+        icon: Icons.edit_note_rounded,
+        title: _searchQuery.isNotEmpty ? 'No matching notes' : 'No notes yet',
+        subtitle: _searchQuery.isNotEmpty
+            ? 'Try a different search term'
+            : 'Tap + to write your first workout note or meal plan',
       );
     }
 

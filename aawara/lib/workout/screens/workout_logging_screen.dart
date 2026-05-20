@@ -38,6 +38,12 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // Accordion: which exercise is currently expanded
   String? _expandedId;
 
+  // Exercises that have already shown the overload nudge this session
+  final Set<String> _nudgedExercises = {};
+
+  // Set IDs that achieved a PR this session (drives ⭐ badge)
+  final Map<String, bool> _setPRs = {};
+
   // Rest timer
   Timer? _restTimer;
   int _restRemaining = 0;
@@ -169,7 +175,103 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       final idx = exLog.sets.indexWhere((s) => s.id == setLog.id);
       if (idx >= 0) exLog.sets[idx] = updated;
     });
-    if (next && !_log.completed) _startRest(90);
+    if (next && !_log.completed) {
+      _startRest(90);
+      _checkPR(exLog, updated);
+      _checkOverloadNudge(exLog);
+    }
+  }
+
+  Future<void> _checkOverloadNudge(ExerciseLog exLog) async {
+    final exerciseId = exLog.exerciseId;
+    if (_nudgedExercises.contains(exerciseId)) return;
+
+    // Best volume in the current session for this exercise
+    final completedSets = exLog.sets
+        .where((s) => s.isCompleted && s.weight != null && s.reps != null);
+    if (completedSets.isEmpty) return;
+
+    final bestSet = completedSets
+        .reduce((a, b) => a.volume >= b.volume ? a : b);
+    final currentBest = bestSet.volume;
+    if (currentBest <= 0) return;
+
+    // Get the last 2 completed sessions for this exercise
+    final sessions = await _db.getLastNSessionsForExercise(exerciseId, 2);
+    if (sessions.length < 2) return;
+
+    double sessionBest(List<SetLog> sets) => sets
+        .where((s) => s.weight != null && s.reps != null)
+        .fold(0.0, (best, s) => s.volume > best ? s.volume : best);
+
+    final prev1 = sessionBest(sessions[0]);
+    final prev2 = sessionBest(sessions[1]);
+
+    if (currentBest != prev1 || currentBest != prev2) return;
+
+    _nudgedExercises.add(exerciseId);
+
+    final w = bestSet.weight!.toStringAsFixed(1);
+    final r = bestSet.reps!;
+    final suggested = (bestSet.weight! + 2.5).toStringAsFixed(1);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          "You've hit ${w}kg × $r three times in a row. "
+          "Try ${suggested}kg next set? 💪",
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF1A1A2E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'Got it',
+          textColor: const Color(0xFFFFD700),
+          onPressed: () {},
+        ),
+      ),
+    );
+  }
+
+  Future<void> _checkPR(ExerciseLog exLog, SetLog setLog) async {
+    final w = setLog.weight;
+    final r = setLog.reps;
+    if (w == null || r == null || r == 0) return;
+
+    final orm = w * (1 + r / 30.0); // Epley formula
+    final storedBest = await _db.getBest1RM(exLog.exerciseId);
+    if (storedBest != null && orm <= storedBest) return;
+
+    final now = DateTime.now();
+    final date =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+    await _db.updateBest1RM(exLog.exerciseId, orm, date);
+
+    if (!mounted) return;
+    setState(() => _setPRs[setLog.id] = true);
+    HapticFeedback.heavyImpact();
+
+    final exName = _exercises[exLog.id]?.name ?? '';
+    _showPRCelebration(exName, orm);
+  }
+
+  void _showPRCelebration(String exerciseName, double orm) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.82),
+      builder: (_) => _PRCelebrationDialog(
+        exerciseName: exerciseName,
+        orm: orm,
+      ),
+    );
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+    });
   }
 
   Future<void> _addSet(ExerciseLog exLog) async {
@@ -861,16 +963,37 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         children: [
           SizedBox(
             width: 32,
-            child: Text(
-              '${setLog.setNumber}',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: setLog.isCompleted
-                    ? const Color(0xFFFFD700)
-                    : const Color(0xFF888899),
-                fontWeight: FontWeight.bold,
-                fontSize: 14,
-              ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                Text(
+                  '${setLog.setNumber}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: setLog.isCompleted
+                        ? const Color(0xFFFFD700)
+                        : const Color(0xFF888899),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                Positioned(
+                  top: -6,
+                  right: -4,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    transitionBuilder: (child, anim) =>
+                        ScaleTransition(scale: anim, child: child),
+                    child: _setPRs[setLog.id] == true
+                        ? const Icon(Icons.star_rounded,
+                            key: ValueKey('pr'),
+                            color: Color(0xFFFFD700),
+                            size: 11)
+                        : const SizedBox.shrink(key: ValueKey('no')),
+                  ),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -1629,6 +1752,93 @@ class _InlineExercisePickerState extends State<_InlineExercisePicker> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── PR Celebration Overlay ────────────────────────────────────────────────────
+
+class _PRCelebrationDialog extends StatefulWidget {
+  final String exerciseName;
+  final double orm;
+
+  const _PRCelebrationDialog({required this.exerciseName, required this.orm});
+
+  @override
+  State<_PRCelebrationDialog> createState() => _PRCelebrationDialogState();
+}
+
+class _PRCelebrationDialogState extends State<_PRCelebrationDialog>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 500));
+    _scale = CurvedAnimation(parent: _ctrl, curve: Curves.elasticOut);
+    _ctrl.forward();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: ScaleTransition(
+        scale: _scale,
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 48),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 32, vertical: 40),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A1A2E),
+              borderRadius: BorderRadius.circular(24),
+              border:
+                  Border.all(color: const Color(0xFFFFD700), width: 2),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('⭐', style: TextStyle(fontSize: 64)),
+                const SizedBox(height: 12),
+                const Text(
+                  'New PR!',
+                  style: TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  widget.exerciseName,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${widget.orm.toStringAsFixed(1)} kg estimated 1RM',
+                  style: const TextStyle(
+                      color: Color(0xFF888899), fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
