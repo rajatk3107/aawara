@@ -1836,6 +1836,482 @@ class WorkoutDatabase {
     return (imported: imported, skipped: skipped);
   }
 
+  // ─── FULL BACKUP EXPORT ─────────────────────────────────────────────────────
+
+  /// Exports ALL user-created data as a single JSON string (schema_version: 3).
+  Future<String> exportFullBackup() async {
+    final db = await database;
+
+    // Custom foods
+    final customFoods = await db.query('foods', where: 'is_custom = ?', whereArgs: [1]);
+
+    // Custom exercises
+    final customExercises = await db.query('exercises', where: 'is_custom = ?', whereArgs: [1]);
+
+    // Workout logs with full exercise/set data
+    final allLogs = await getWorkoutLogsForExport();
+    final exerciseMap = <String, Exercise>{};
+    for (final log in allLogs) {
+      for (final exLog in log.exercises) {
+        if (!exerciseMap.containsKey(exLog.exerciseId)) {
+          final ex = await getExerciseById(exLog.exerciseId);
+          if (ex != null) exerciseMap[exLog.exerciseId] = ex;
+        }
+      }
+    }
+    final workoutsJson = allLogs.map((log) => {
+      'date': log.date,
+      'workout_name': log.workoutName,
+      'completed': log.completed,
+      if (log.durationSeconds != null) 'duration_seconds': log.durationSeconds,
+      'exercises': log.exercises.map((exLog) {
+        final ex = exerciseMap[exLog.exerciseId];
+        return {
+          'name': ex?.name ?? exLog.exerciseId,
+          'muscle_group': ex?.muscleGroup ?? '',
+          'equipment': ex?.equipment ?? '',
+          'exercise_type': ex?.exerciseType ?? 'strength',
+          'sets': exLog.sets.map((s) => {
+            'set_number': s.setNumber,
+            'is_completed': s.isCompleted,
+            if (s.weight != null) 'weight_kg': s.weight,
+            if (s.reps != null) 'reps': s.reps,
+            if (s.durationSeconds != null) 'duration_seconds': s.durationSeconds,
+            if (s.speed != null) 'speed': s.speed,
+            if (s.incline != null) 'incline': s.incline,
+            if (s.resistance != null) 'resistance': s.resistance,
+            if (s.distanceKm != null) 'distance_km': s.distanceKm,
+          }).toList(),
+        };
+      }).toList(),
+    }).toList();
+
+    // Nutrition logs + entries (per-meal detail)
+    final nutritionLogRows = await db.query('nutrition_logs');
+    final nutritionEntriesList = <Map<String, dynamic>>[];
+    for (final nlRow in nutritionLogRows) {
+      final entries = await db.query('nutrition_entries',
+          where: 'log_id = ?', whereArgs: [nlRow['id']]);
+      for (final entry in entries) {
+        nutritionEntriesList.add({...entry, 'date': nlRow['date']});
+      }
+    }
+
+    // Water logs
+    final waterLogs = await db.query('water_logs');
+
+    // Meal presets + items
+    final presetRows = await db.query('meal_presets');
+    final presetsJson = <Map<String, dynamic>>[];
+    for (final p in presetRows) {
+      final items = await db.query('meal_preset_items',
+          where: 'preset_id = ?', whereArgs: [p['id']]);
+      presetsJson.add({...p, 'items': items.toList()});
+    }
+
+    // Body weight logs
+    final bodyWeightLogs = await db.query('body_weight_logs');
+
+    // Wellness logs
+    final wellnessLogs = await db.query('wellness_logs');
+
+    // Achievements
+    final achievements = await db.query('achievements_unlocked');
+
+    // Exercise PRs (include exercise name for portability)
+    final prs = await db.rawQuery('''
+      SELECT ep.exercise_id, ep.best_1rm, ep.date, e.name AS exercise_name
+      FROM exercise_prs ep
+      LEFT JOIN exercises e ON e.id = ep.exercise_id
+    ''');
+
+    // Nutrition goals
+    final nutritionGoals = await db.query('nutrition_goals');
+
+    // Day overrides
+    final dayOverrides = await db.query('day_overrides');
+
+    // Quick start templates
+    final quickStartTemplates = await db.query('quick_start_templates');
+
+    final payload = <String, dynamic>{
+      'app': 'aawara',
+      'schema_version': 3,
+      'exported_at': DateTime.now().toIso8601String(),
+      'custom_foods': customFoods.toList(),
+      'custom_exercises': customExercises.toList(),
+      'workout_logs': workoutsJson,
+      'body_weight_logs': bodyWeightLogs.toList(),
+      'nutrition_logs': nutritionEntriesList,
+      'water_logs': waterLogs.toList(),
+      'meal_presets': presetsJson,
+      'wellness_logs': wellnessLogs.toList(),
+      'achievements': achievements.toList(),
+      'exercise_prs': prs.toList(),
+      'nutrition_goals': nutritionGoals.toList(),
+      'day_overrides': dayOverrides.toList(),
+      'quick_start_templates': quickStartTemplates.toList(),
+    };
+    return const JsonEncoder.withIndent('  ').convert(payload);
+  }
+
+  // ─── FULL BACKUP IMPORT ─────────────────────────────────────────────────────
+
+  /// Imports a full backup (schema_version: 3). Merges safely — existing rows
+  /// are never overwritten. Returns counts per data type.
+  Future<Map<String, ({int imported, int skipped})>> importFullBackup(String jsonStr) async {
+    final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+    final db = await database;
+    const uuid = Uuid();
+
+    final counts = <String, ({int imported, int skipped})>{};
+
+    int imp = 0, skip = 0;
+
+    // ── Custom exercises ──────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final nameCache = <String, String>{};
+    for (final ex in await getAllExercises()) {
+      nameCache[ex.name.toLowerCase()] = ex.id;
+    }
+    final customExercises = (data['custom_exercises'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final e in customExercises) {
+      final name = (e['name'] as String? ?? '').trim();
+      if (name.isEmpty) { skip++; continue; }
+      if (nameCache.containsKey(name.toLowerCase())) { skip++; continue; }
+      final newId = uuid.v4();
+      await db.insert('exercises', {
+        'id': newId,
+        'name': name,
+        'muscle_group': e['muscle_group'] as String? ?? 'Full Body',
+        'equipment': e['equipment'] as String? ?? 'Other',
+        'is_custom': 1,
+        'exercise_type': e['exercise_type'] as String? ?? 'strength',
+      });
+      nameCache[name.toLowerCase()] = newId;
+      imp++;
+    }
+    counts['custom_exercises'] = (imported: imp, skipped: skip);
+
+    // ── Custom foods ─────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final customFoods = (data['custom_foods'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final f in customFoods) {
+      final id = f['id'] as String? ?? '';
+      if (id.isEmpty) { skip++; continue; }
+      final existing = await db.query('foods', where: 'id = ?', whereArgs: [id], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      // Also check by name to avoid name duplicates
+      final byName = await db.query('foods',
+          where: 'LOWER(name) = LOWER(?)', whereArgs: [f['name'] ?? ''], limit: 1);
+      if (byName.isNotEmpty) { skip++; continue; }
+      await db.insert('foods', {
+        'id': id,
+        'name': f['name'] as String? ?? '',
+        'calories': (f['calories'] as num?)?.toDouble() ?? 0.0,
+        'protein_g': (f['protein_g'] as num?)?.toDouble() ?? 0.0,
+        'carbs_g': (f['carbs_g'] as num?)?.toDouble() ?? 0.0,
+        'fat_g': (f['fat_g'] as num?)?.toDouble() ?? 0.0,
+        'fiber_g': (f['fiber_g'] as num?)?.toDouble(),
+        'serving_size': (f['serving_size'] as num?)?.toDouble() ?? 100.0,
+        'serving_unit': f['serving_unit'] as String? ?? 'g',
+        'is_custom': 1,
+      });
+      imp++;
+    }
+    counts['custom_foods'] = (imported: imp, skipped: skip);
+
+    // ── Workout logs ─────────────────────────────────────────────────────────
+    // Rebuild name cache after custom exercise import
+    for (final ex in await getAllExercises()) {
+      nameCache[ex.name.toLowerCase()] = ex.id;
+    }
+    final workouts = (data['workout_logs'] as List? ?? []).cast<Map<String, dynamic>>();
+    imp = 0; skip = 0;
+    for (final w in workouts) {
+      final date = w['date'] as String? ?? '';
+      if (date.isEmpty) { skip++; continue; }
+      final existing = await db.query('workout_logs', where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      final logId = uuid.v4();
+      await db.insert('workout_logs', {
+        'id': logId,
+        'date': date,
+        'workout_name': w['workout_name'] as String? ?? 'Imported Workout',
+        'completed': (w['completed'] as bool? ?? false) ? 1 : 0,
+        'duration_seconds': w['duration_seconds'] as int?,
+        'notes': w['notes'] as String?,
+        'plan_day_id': null,
+      });
+      final exercises = (w['exercises'] as List? ?? []).cast<Map<String, dynamic>>();
+      for (int i = 0; i < exercises.length; i++) {
+        final e = exercises[i];
+        final name = (e['name'] as String? ?? '').trim();
+        if (name.isEmpty) continue;
+        String exId;
+        if (nameCache.containsKey(name.toLowerCase())) {
+          exId = nameCache[name.toLowerCase()]!;
+        } else {
+          exId = uuid.v4();
+          await db.insert('exercises', {
+            'id': exId,
+            'name': name,
+            'muscle_group': e['muscle_group'] as String? ?? 'Full Body',
+            'equipment': e['equipment'] as String? ?? 'Other',
+            'is_custom': 1,
+            'exercise_type': e['exercise_type'] as String? ?? 'strength',
+          });
+          nameCache[name.toLowerCase()] = exId;
+        }
+        final exLogId = uuid.v4();
+        await db.insert('exercise_logs', {
+          'id': exLogId,
+          'workout_log_id': logId,
+          'exercise_id': exId,
+          'order_index': i,
+        });
+        final sets = (e['sets'] as List? ?? []).cast<Map<String, dynamic>>();
+        for (final s in sets) {
+          await db.insert('set_logs', {
+            'id': uuid.v4(),
+            'exercise_log_id': exLogId,
+            'set_number': s['set_number'] as int? ?? 1,
+            'weight': (s['weight_kg'] as num?)?.toDouble(),
+            'reps': s['reps'] as int?,
+            'is_completed': (s['is_completed'] as bool? ?? false) ? 1 : 0,
+            'duration_seconds': s['duration_seconds'] as int?,
+            'speed': (s['speed'] as num?)?.toDouble(),
+            'incline': (s['incline'] as num?)?.toDouble(),
+            'resistance': (s['resistance'] as num?)?.toDouble(),
+            'distance_km': (s['distance_km'] as num?)?.toDouble(),
+          });
+        }
+      }
+      imp++;
+    }
+    counts['workout_logs'] = (imported: imp, skipped: skip);
+
+    // ── Body weight logs ─────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final bwLogs = (data['body_weight_logs'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final bw in bwLogs) {
+      final date = bw['date'] as String? ?? '';
+      final wkg = (bw['weight_kg'] as num?)?.toDouble();
+      if (date.isEmpty || wkg == null) { skip++; continue; }
+      final existing = await db.query('body_weight_logs',
+          where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('body_weight_logs', {
+        'id': uuid.v4(),
+        'date': date,
+        'weight_kg': wkg,
+        'notes': bw['notes'] as String?,
+      });
+      imp++;
+    }
+    counts['body_weight_logs'] = (imported: imp, skipped: skip);
+
+    // ── Nutrition entries ────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final nutritionEntries = (data['nutrition_logs'] as List? ?? []).cast<Map<String, dynamic>>();
+    // Group by date
+    final byDate = <String, List<Map<String, dynamic>>>{};
+    for (final e in nutritionEntries) {
+      final d = e['date'] as String? ?? '';
+      if (d.isNotEmpty) (byDate[d] ??= []).add(e);
+    }
+    // Build food id lookup (existing + imported custom foods)
+    final foodCache = <String, String>{}; // id → id (for existence check)
+    final existingFoods = await db.query('foods', columns: ['id']);
+    for (final f in existingFoods) {
+      foodCache[f['id'] as String] = f['id'] as String;
+    }
+    for (final date in byDate.keys) {
+      final logRows = await db.query('nutrition_logs',
+          where: 'date = ?', whereArgs: [date], limit: 1);
+      String logId;
+      if (logRows.isNotEmpty) {
+        logId = logRows.first['id'] as String;
+        // Date already has a log — skip all entries for it to avoid duplicates
+        skip += byDate[date]!.length;
+        continue;
+      }
+      logId = uuid.v4();
+      await db.insert('nutrition_logs', {'id': logId, 'date': date});
+      for (final entry in byDate[date]!) {
+        final foodId = entry['food_id'] as String? ?? '';
+        if (foodId.isEmpty || !foodCache.containsKey(foodId)) { skip++; continue; }
+        await db.insert('nutrition_entries', {
+          'id': uuid.v4(),
+          'log_id': logId,
+          'food_id': foodId,
+          'meal_type': entry['meal_type'] as String? ?? 'Snack',
+          'quantity': (entry['quantity'] as num?)?.toDouble() ?? 1.0,
+          'created_at': entry['created_at'] as String? ?? DateTime.now().toIso8601String(),
+        });
+        imp++;
+      }
+    }
+    counts['nutrition_logs'] = (imported: imp, skipped: skip);
+
+    // ── Water logs ───────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final waterLogs = (data['water_logs'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final w in waterLogs) {
+      final date = w['date'] as String? ?? '';
+      if (date.isEmpty) { skip++; continue; }
+      final existing = await db.query('water_logs', where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('water_logs', {
+        'date': date,
+        'glasses_drunk': w['glasses_drunk'] as int? ?? 0,
+        'target_glasses': w['target_glasses'] as int? ?? 8,
+      });
+      imp++;
+    }
+    counts['water_logs'] = (imported: imp, skipped: skip);
+
+    // ── Meal presets ─────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final mealPresets = (data['meal_presets'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final p in mealPresets) {
+      final id = p['id'] as String? ?? '';
+      if (id.isEmpty) { skip++; continue; }
+      final existing = await db.query('meal_presets', where: 'id = ?', whereArgs: [id], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('meal_presets', {
+        'id': id,
+        'name': p['name'] as String? ?? 'Imported Preset',
+        'created_at': p['created_at'] as String? ?? DateTime.now().toIso8601String(),
+      });
+      final items = (p['items'] as List? ?? []).cast<Map<String, dynamic>>();
+      for (final item in items) {
+        final foodId = item['food_id'] as String? ?? '';
+        if (foodId.isEmpty || !foodCache.containsKey(foodId)) continue;
+        await db.insert('meal_preset_items', {
+          'id': item['id'] as String? ?? uuid.v4(),
+          'preset_id': id,
+          'food_id': foodId,
+          'quantity': (item['quantity'] as num?)?.toDouble() ?? 1.0,
+        });
+      }
+      imp++;
+    }
+    counts['meal_presets'] = (imported: imp, skipped: skip);
+
+    // ── Wellness logs ────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final wellnessLogs = (data['wellness_logs'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final w in wellnessLogs) {
+      final date = w['date'] as String? ?? '';
+      if (date.isEmpty) { skip++; continue; }
+      final existing = await db.query('wellness_logs',
+          where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('wellness_logs', {
+        'id': w['id'] as String? ?? uuid.v4(),
+        'date': date,
+        'sleep_hours': (w['sleep_hours'] as num?)?.toDouble() ?? 0.0,
+        'energy': w['energy'] as int? ?? 3,
+        'soreness': w['soreness'] as int? ?? 3,
+        'notes': w['notes'] as String?,
+      });
+      imp++;
+    }
+    counts['wellness_logs'] = (imported: imp, skipped: skip);
+
+    // ── Achievements ─────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final achievements = (data['achievements'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final a in achievements) {
+      final aid = a['achievement_id'] as String? ?? '';
+      if (aid.isEmpty) { skip++; continue; }
+      final existing = await db.query('achievements_unlocked',
+          where: 'achievement_id = ?', whereArgs: [aid], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('achievements_unlocked', {
+        'achievement_id': aid,
+        'unlocked_at': a['unlocked_at'] as String? ?? DateTime.now().toIso8601String(),
+      });
+      imp++;
+    }
+    counts['achievements'] = (imported: imp, skipped: skip);
+
+    // ── Exercise PRs ─────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final prs = (data['exercise_prs'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final pr in prs) {
+      final exName = (pr['exercise_name'] as String? ?? '').trim();
+      if (exName.isEmpty) { skip++; continue; }
+      final exId = nameCache[exName.toLowerCase()];
+      if (exId == null) { skip++; continue; }
+      final existing = await db.query('exercise_prs',
+          where: 'exercise_id = ?', whereArgs: [exId], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('exercise_prs', {
+        'exercise_id': exId,
+        'best_1rm': (pr['best_1rm'] as num?)?.toDouble() ?? 0.0,
+        'date': pr['date'] as String? ?? _fmt(DateTime.now()),
+      });
+      imp++;
+    }
+    counts['exercise_prs'] = (imported: imp, skipped: skip);
+
+    // ── Nutrition goals ──────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final existingGoals = await db.query('nutrition_goals', limit: 1);
+    if (existingGoals.isEmpty) {
+      final goals = (data['nutrition_goals'] as List? ?? []).cast<Map<String, dynamic>>();
+      for (final g in goals) {
+        await db.insert('nutrition_goals', {
+          'calories': (g['calories'] as num?)?.toDouble() ?? 2000.0,
+          'protein_g': (g['protein_g'] as num?)?.toDouble() ?? 150.0,
+          'carbs_g': (g['carbs_g'] as num?)?.toDouble() ?? 200.0,
+          'fat_g': (g['fat_g'] as num?)?.toDouble() ?? 65.0,
+        });
+        imp++;
+      }
+    } else {
+      skip = (data['nutrition_goals'] as List? ?? []).length;
+    }
+    counts['nutrition_goals'] = (imported: imp, skipped: skip);
+
+    // ── Day overrides ────────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final dayOverrides = (data['day_overrides'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final d in dayOverrides) {
+      final date = d['date'] as String? ?? '';
+      if (date.isEmpty) { skip++; continue; }
+      final existing = await db.query('day_overrides', where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('day_overrides', {
+        'date': date,
+        'exercise_ids_json': d['exercise_ids_json'] as String? ?? '[]',
+      });
+      imp++;
+    }
+    counts['day_overrides'] = (imported: imp, skipped: skip);
+
+    // ── Quick start templates ────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final templates = (data['quick_start_templates'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final t in templates) {
+      final name = (t['name'] as String? ?? '').trim();
+      if (name.isEmpty) { skip++; continue; }
+      final existing = await db.query('quick_start_templates',
+          where: 'name = ?', whereArgs: [name], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      await db.insert('quick_start_templates', {
+        'name': name,
+        'exercise_ids_json': t['exercise_ids_json'] as String? ?? '[]',
+      });
+      imp++;
+    }
+    counts['quick_start_templates'] = (imported: imp, skipped: skip);
+
+    return counts;
+  }
+
   // ─── MONTHLY SUMMARY ────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getMonthlySummary(int year, int month) async {

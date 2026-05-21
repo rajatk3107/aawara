@@ -43,6 +43,7 @@ class _ExportScreenState extends State<ExportScreen> {
   int? _previewSets;
 
   bool _exporting = false;
+  bool _exportingFullBackup = false;
   bool _importing = false;
   bool _loadingPreview = false;
 
@@ -153,6 +154,35 @@ class _ExportScreenState extends State<ExportScreen> {
       }
     } finally {
       if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ─── Full Backup Export ───────────────────────────────────────────────────
+
+  Future<void> _exportFullBackup() async {
+    setState(() => _exportingFullBackup = true);
+    try {
+      final content = await _db.exportFullBackup();
+      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final fileName = 'aawara_fullbackup_$stamp.json';
+      final tmpDir = await getTemporaryDirectory();
+      final file = File('${tmpDir.path}/$fileName');
+      await file.writeAsString(content, encoding: utf8);
+      if (!mounted) return;
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'application/json')],
+        subject: 'Aawara Full Backup',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Backup failed: $e'),
+          backgroundColor: const Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _exportingFullBackup = false);
     }
   }
 
@@ -455,6 +485,9 @@ class _ExportScreenState extends State<ExportScreen> {
           const SizedBox(height: 20),
           _buildPreviewCard(),
           const SizedBox(height: 28),
+          _sectionLabel('FULL BACKUP'),
+          _buildFullBackupCard(),
+          const SizedBox(height: 28),
           _sectionLabel('RESTORE FROM BACKUP'),
           _buildImportCard(),
         ],
@@ -523,6 +556,73 @@ class _ExportScreenState extends State<ExportScreen> {
           ),
         ),
       );
+
+  // ─── Full backup card ─────────────────────────────────────────────────────
+
+  Widget _buildFullBackupCard() {
+    return GestureDetector(
+      onTap: _exportingFullBackup ? null : _exportFullBackup,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF12121F),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _exportingFullBackup
+                ? const Color(0xFF333355)
+                : const Color(0xFF3498DB).withValues(alpha: 0.35),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF3498DB).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _exportingFullBackup
+                  ? const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Color(0xFF3498DB)),
+                      ),
+                    )
+                  : const Icon(Icons.backup_rounded,
+                      color: Color(0xFF3498DB), size: 22),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Export Full Backup',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Exports everything: workouts, nutrition, water, custom foods & more',
+                    style: TextStyle(color: Color(0xFF555577), fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.ios_share_rounded,
+                color: Color(0xFF3498DB), size: 18),
+          ],
+        ),
+      ),
+    );
+  }
 
   // ─── Import card ─────────────────────────────────────────────────────────
 
