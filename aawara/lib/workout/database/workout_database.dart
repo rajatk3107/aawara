@@ -24,7 +24,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 9,
+      version: 10,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -39,6 +39,7 @@ class WorkoutDatabase {
     if (oldVersion < 7) await _migrateV7(db);
     if (oldVersion < 8) await _migrateV8(db);
     if (oldVersion < 9) await _migrateV9(db);
+    if (oldVersion < 10) await _migrateV10(db);
   }
 
   Future<void> _migrateV8(Database db) async {
@@ -82,6 +83,31 @@ class WorkoutDatabase {
       )
     ''');
     await _seedFoodsIfEmpty(db);
+  }
+
+  Future<void> _migrateV10(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_presets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_preset_items (
+        id TEXT PRIMARY KEY,
+        preset_id TEXT NOT NULL,
+        food_id TEXT NOT NULL,
+        quantity REAL NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS water_logs (
+        date TEXT PRIMARY KEY,
+        glasses_drunk INTEGER NOT NULL DEFAULT 0,
+        target_glasses INTEGER NOT NULL DEFAULT 8
+      )
+    ''');
   }
 
   Future<void> _migrateV9(Database db) async {
@@ -347,6 +373,29 @@ class WorkoutDatabase {
         protein_g REAL NOT NULL,
         carbs_g REAL NOT NULL,
         fat_g REAL NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE meal_presets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE meal_preset_items (
+        id TEXT PRIMARY KEY,
+        preset_id TEXT NOT NULL,
+        food_id TEXT NOT NULL,
+        quantity REAL NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE water_logs (
+        date TEXT PRIMARY KEY,
+        glasses_drunk INTEGER NOT NULL DEFAULT 0,
+        target_glasses INTEGER NOT NULL DEFAULT 8
       )
     ''');
 
@@ -2230,6 +2279,125 @@ class WorkoutDatabase {
     );
     if (rows.isEmpty) return null;
     return Food.fromMap(rows.first);
+  }
+
+  // ── Water Logs ────────────────────────────────────────────────────────────────
+
+  Future<WaterLog> getWaterLog(String date) async {
+    final db = await database;
+    final rows = await db.query('water_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (rows.isNotEmpty) return WaterLog.fromMap(rows.first);
+    return WaterLog(date: date, glassesDrunk: 0, targetGlasses: 8);
+  }
+
+  Future<void> setWaterGlasses(String date, int glasses,
+      {int targetGlasses = 8}) async {
+    final db = await database;
+    await db.insert(
+      'water_logs',
+      {'date': date, 'glasses_drunk': glasses, 'target_glasses': targetGlasses},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> updateWaterTarget(String date, int target) async {
+    final db = await database;
+    final existing = await db.query('water_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    final glasses =
+        existing.isNotEmpty ? existing.first['glasses_drunk'] as int : 0;
+    await db.insert(
+      'water_logs',
+      {'date': date, 'glasses_drunk': glasses, 'target_glasses': target},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  // ── Meal Presets ──────────────────────────────────────────────────────────────
+
+  Future<List<MealPreset>> getMealPresets() async {
+    final db = await database;
+    final presets = await db.query('meal_presets', orderBy: 'created_at DESC');
+    final result = <MealPreset>[];
+    for (final p in presets) {
+      final id = p['id'] as String;
+      final itemRows = await db.rawQuery('''
+        SELECT mpi.id, mpi.preset_id, mpi.quantity,
+               f.id as food_id, f.name, f.calories, f.protein_g, f.carbs_g,
+               f.fat_g, f.fiber_g, f.serving_size, f.serving_unit, f.is_custom
+        FROM meal_preset_items mpi
+        INNER JOIN foods f ON mpi.food_id = f.id
+        WHERE mpi.preset_id = ?
+      ''', [id]);
+      final items = itemRows.map((r) {
+        final food = Food.fromMap({
+          'id': r['food_id'],
+          'name': r['name'],
+          'calories': r['calories'],
+          'protein_g': r['protein_g'],
+          'carbs_g': r['carbs_g'],
+          'fat_g': r['fat_g'],
+          'fiber_g': r['fiber_g'],
+          'serving_size': r['serving_size'],
+          'serving_unit': r['serving_unit'],
+          'is_custom': r['is_custom'],
+        });
+        return MealPresetItem(
+          id: r['id'] as String,
+          presetId: id,
+          food: food,
+          quantity: (r['quantity'] as num).toDouble(),
+        );
+      }).toList();
+      result.add(MealPreset(
+        id: id,
+        name: p['name'] as String,
+        createdAt: p['created_at'] as String,
+        items: items,
+      ));
+    }
+    return result;
+  }
+
+  Future<MealPreset> createMealPreset(
+      String name, List<NutritionEntry> entries) async {
+    final db = await database;
+    const uuid = Uuid();
+    final id = uuid.v4();
+    final now = DateTime.now().toIso8601String();
+    await db.insert('meal_presets', {'id': id, 'name': name, 'created_at': now});
+    for (final e in entries) {
+      await db.insert('meal_preset_items', {
+        'id': uuid.v4(),
+        'preset_id': id,
+        'food_id': e.food.id,
+        'quantity': e.quantity,
+      });
+    }
+    return (await getMealPresets()).firstWhere((p) => p.id == id);
+  }
+
+  Future<void> logMealPreset(
+      String presetId, String date, String mealType) async {
+    final db = await database;
+    final itemRows = await db.query('meal_preset_items',
+        where: 'preset_id = ?', whereArgs: [presetId]);
+    for (final row in itemRows) {
+      await addNutritionEntry(
+        date,
+        row['food_id'] as String,
+        mealType,
+        (row['quantity'] as num).toDouble(),
+      );
+    }
+  }
+
+  Future<void> deleteMealPreset(String id) async {
+    final db = await database;
+    await db.delete('meal_preset_items',
+        where: 'preset_id = ?', whereArgs: [id]);
+    await db.delete('meal_presets', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<List<DailyNutritionSummary>> getNutritionHistory(

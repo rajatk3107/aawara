@@ -136,6 +136,77 @@ class NutritionTotals {
   );
 }
 
+class WaterLog {
+  final String date;
+  final int glassesDrunk;
+  final int targetGlasses;
+
+  const WaterLog({
+    required this.date,
+    required this.glassesDrunk,
+    required this.targetGlasses,
+  });
+
+  double get liters => glassesDrunk * 0.25;
+  double get targetLiters => targetGlasses * 0.25;
+
+  factory WaterLog.fromMap(Map<String, dynamic> m) => WaterLog(
+        date: m['date'] as String,
+        glassesDrunk: m['glasses_drunk'] as int,
+        targetGlasses: m['target_glasses'] as int,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'date': date,
+        'glasses_drunk': glassesDrunk,
+        'target_glasses': targetGlasses,
+      };
+
+  WaterLog copyWith({int? glassesDrunk, int? targetGlasses}) => WaterLog(
+        date: date,
+        glassesDrunk: glassesDrunk ?? this.glassesDrunk,
+        targetGlasses: targetGlasses ?? this.targetGlasses,
+      );
+}
+
+class MealPresetItem {
+  final String id;
+  final String presetId;
+  final Food food;
+  final double quantity;
+
+  const MealPresetItem({
+    required this.id,
+    required this.presetId,
+    required this.food,
+    required this.quantity,
+  });
+
+  double get calories => food.calories * quantity;
+  double get proteinG => food.proteinG * quantity;
+  double get carbsG => food.carbsG * quantity;
+  double get fatG => food.fatG * quantity;
+}
+
+class MealPreset {
+  final String id;
+  final String name;
+  final String createdAt;
+  final List<MealPresetItem> items;
+
+  const MealPreset({
+    required this.id,
+    required this.name,
+    required this.createdAt,
+    required this.items,
+  });
+
+  double get totalCalories =>
+      items.fold(0.0, (s, i) => s + i.calories);
+  double get totalProtein =>
+      items.fold(0.0, (s, i) => s + i.proteinG);
+}
+
 class DailyNutritionSummary {
   final String date;
   final double calories;

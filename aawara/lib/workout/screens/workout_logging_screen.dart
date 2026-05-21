@@ -50,6 +50,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   Timer? _restTimer;
   int _restRemaining = 0;
   int _restTotal = 90;
+  int _restDefault = 90; // loaded from prefs, user-configurable
 
   @override
   void initState() {
@@ -65,6 +66,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         _expandedId = _log.exercises.first.id;
       }
       _initTimer();
+      _loadRestDefault();
     }
     _loadDetails();
   }
@@ -111,6 +113,18 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       prefs.remove('wl_start_${_log.id}');
       prefs.remove('wl_paused_elapsed_${_log.id}');
     });
+  }
+
+  Future<void> _loadRestDefault() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _restDefault = prefs.getInt('rest_default_seconds') ?? 90);
+  }
+
+  Future<void> _saveRestDefault(int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('rest_default_seconds', seconds);
+    setState(() => _restDefault = seconds);
   }
 
   @override
@@ -197,7 +211,13 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       setState(() {
         if (_restRemaining > 0) {
           _restRemaining--;
-          if (_restRemaining == 0) HapticFeedback.mediumImpact();
+          if (_restRemaining == 0) {
+            HapticFeedback.heavyImpact();
+            Future.delayed(const Duration(milliseconds: 200),
+                HapticFeedback.heavyImpact);
+            Future.delayed(const Duration(milliseconds: 400),
+                HapticFeedback.heavyImpact);
+          }
         } else {
           t.cancel();
         }
@@ -208,6 +228,73 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   void _cancelRest() {
     _restTimer?.cancel();
     setState(() => _restRemaining = 0);
+  }
+
+  void _showRestDurationPicker() {
+    const options = [30, 45, 60, 90, 120, 180, 240];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Default Rest Time',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            const Text('Long-press the rest bar to change anytime.',
+                style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: options.map((s) {
+                final label =
+                    s >= 60 ? '${s ~/ 60}m${s % 60 > 0 ? ' ${s % 60}s' : ''}' : '${s}s';
+                final selected = s == _restDefault;
+                return GestureDetector(
+                  onTap: () {
+                    _saveRestDefault(s);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFF3498DB).withValues(alpha: 0.15)
+                          : const Color(0xFF0D0D1A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? const Color(0xFF3498DB)
+                            : const Color(0xFF1E1E35),
+                      ),
+                    ),
+                    child: Text(label,
+                        style: TextStyle(
+                            color: selected
+                                ? const Color(0xFF3498DB)
+                                : const Color(0xFFCCCCDD),
+                            fontWeight: selected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            fontSize: 14)),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ─── Set actions ──────────────────────────────────────────────────────────────
@@ -221,7 +308,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       if (idx >= 0) exLog.sets[idx] = updated;
     });
     if (next && !_log.completed) {
-      _startRest(90);
+      _startRest(_restDefault);
       _checkPR(exLog, updated);
       _checkOverloadNudge(exLog);
     }
@@ -1503,11 +1590,14 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                 size: 15,
               ),
               const SizedBox(width: 7),
-              Text(
-                done ? 'Rest done — go!' : 'Rest',
-                style: TextStyle(
-                  color: done ? const Color(0xFF2ECC71) : Colors.white54,
-                  fontSize: 12,
+              GestureDetector(
+                onLongPress: done ? null : _showRestDurationPicker,
+                child: Text(
+                  done ? 'Rest done — go!' : 'Rest · ${_restDefault}s default',
+                  style: TextStyle(
+                    color: done ? const Color(0xFF2ECC71) : Colors.white54,
+                    fontSize: 12,
+                  ),
                 ),
               ),
               const Spacer(),

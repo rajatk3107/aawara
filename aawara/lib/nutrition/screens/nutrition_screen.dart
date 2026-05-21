@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
 import '../widgets/add_food_sheet.dart';
+import '../widgets/water_tracker_card.dart';
+import 'meal_presets_screen.dart';
 import 'nutrition_goals_screen.dart';
 
 class NutritionScreen extends StatefulWidget {
@@ -100,6 +102,12 @@ class _NutritionScreenState extends State<NutritionScreen> {
             ),
             actions: [
               IconButton(
+                icon: const Icon(Icons.bookmark_outline_rounded,
+                    color: Color(0xFF888899)),
+                tooltip: 'Saved Meals',
+                onPressed: _openPresets,
+              ),
+              IconButton(
                 icon: const Icon(Icons.track_changes_rounded,
                     color: Color(0xFF888899)),
                 tooltip: 'Set Goals',
@@ -123,7 +131,9 @@ class _NutritionScreenState extends State<NutritionScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
                   children: [
                     _buildMacroSummary(),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
+                    WaterTrackerCard(date: _dateStr),
+                    const SizedBox(height: 12),
                     ..._meals.map(_buildMealSection),
                   ],
                 ),
@@ -359,13 +369,20 @@ class _NutritionScreenState extends State<NutritionScreen> {
                         fontWeight: FontWeight.w600),
                   ),
                   const Spacer(),
-                  if (mealCal > 0)
+                  if (mealCal > 0) ...[
                     Text(
                       '${mealCal.round()} kcal',
                       style: const TextStyle(
                           color: Color(0xFF888899), fontSize: 13),
                     ),
-                  const SizedBox(width: 8),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: () => _saveAsPreset(meal),
+                      child: const Icon(Icons.bookmark_add_outlined,
+                          color: Color(0xFF555577), size: 18),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   const Icon(Icons.add_circle_outline_rounded,
                       color: Color(0xFFFFD700), size: 20),
                 ],
@@ -475,6 +492,90 @@ class _NutritionScreenState extends State<NutritionScreen> {
   }
 
   Future<void> _showAddFoodForMeal(String meal) => _showAddFood(meal: meal);
+
+  Future<void> _openPresets() async {
+    final logged = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => MealPresetsScreen(logToDate: _dateStr)),
+    );
+    if (logged == true) _load();
+  }
+
+  Future<void> _saveAsPreset(String meal) async {
+    final entries = _totals.entries
+        .where((e) => e.mealType.toLowerCase() == meal.toLowerCase())
+        .toList();
+    if (entries.isEmpty) return;
+
+    final ctrl = TextEditingController(text: meal);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Save as Preset',
+            style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Preset name',
+            hintStyle: const TextStyle(color: Color(0xFF444466)),
+            filled: true,
+            fillColor: const Color(0xFF0D0D1A),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide:
+                    const BorderSide(color: Color(0xFFFFD700))),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Color(0xFF888899)))),
+          ElevatedButton(
+            onPressed: () {
+              final v = ctrl.text.trim();
+              Navigator.pop(ctx, v.isNotEmpty ? v : null);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFD700),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Save',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (name == null || !mounted) return;
+    await _db.createMealPreset(name, entries);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('"$name" saved to presets'),
+      backgroundColor: const Color(0xFF1A1A2E),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      action: SnackBarAction(
+        label: 'View',
+        textColor: const Color(0xFFFFD700),
+        onPressed: _openPresets,
+      ),
+    ));
+  }
 
   Future<void> _openGoals() async {
     final saved = await Navigator.push<bool>(
