@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
+import '../widgets/workout_heatmap.dart';
 import 'exercise_progress_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 
@@ -43,6 +44,9 @@ class _ProgressScreenState extends State<ProgressScreen>
   List<DailyNutritionSummary> _nutritionHistory = [];
   NutritionGoals _nutGoals = NutritionGoals.defaults;
   bool _nutritionLoading = false;
+
+  // Heatmap
+  int _heatmapMonths = 6;
 
   // Shared overview
   int _streak = 0;
@@ -270,6 +274,12 @@ class _ProgressScreenState extends State<ProgressScreen>
         _buildOverviewCards(),
         const SizedBox(height: 16),
         _buildExerciseTrackerBanner(),
+        const SizedBox(height: 20),
+        _buildSectionHeader('Activity'),
+        const SizedBox(height: 8),
+        _buildHeatmapFilterChips(),
+        const SizedBox(height: 8),
+        WorkoutHeatmap(months: _heatmapMonths),
         const SizedBox(height: 24),
         _buildSectionHeader('Strength Progress'),
         const SizedBox(height: 12),
@@ -790,6 +800,42 @@ class _ProgressScreenState extends State<ProgressScreen>
           ),
         ),
       );
+
+  Widget _buildHeatmapFilterChips() {
+    final chips = [(1, '1M'), (3, '3M'), (6, '6M')];
+    return Row(
+      children: chips.map((c) {
+        final selected = _heatmapMonths == c.$1;
+        return GestureDetector(
+          onTap: () => setState(() => _heatmapMonths = c.$1),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: selected
+                  ? const Color(0xFFFFD700)
+                  : const Color(0xFF1A1A2E),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: selected
+                    ? const Color(0xFFFFD700)
+                    : const Color(0xFF333355),
+              ),
+            ),
+            child: Text(
+              c.$2,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.black : const Color(0xFFCCCCDD),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
 
   Widget _buildIntervalChips() {
     final chips = [

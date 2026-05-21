@@ -15,6 +15,7 @@ import '../../notes/notes_list_screen.dart';
 import '../../settings_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 import '../../nutrition/screens/nutrition_screen.dart';
+import '../widgets/workout_heatmap.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -1350,7 +1351,53 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           childAspectRatio: 2.0,
           children: items.map((item) => _NavCard(item: item)).toList(),
         ),
+        const SizedBox(height: 12),
+        _buildActivityCard(),
       ],
+    );
+  }
+
+  Widget _buildActivityCard() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Your activity',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const ProgressScreen()),
+                ),
+                child: const Text(
+                  'See all',
+                  style: TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const WorkoutHeatmap(months: 3, cellSize: 8),
+        ],
+      ),
     );
   }
 }

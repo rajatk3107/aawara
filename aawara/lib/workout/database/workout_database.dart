@@ -1357,6 +1357,34 @@ class WorkoutDatabase {
     return rows.map((r) => r['date'] as String).toSet();
   }
 
+  Future<Map<String, int>> getWorkoutCountsByDate(
+      String fromDate, String toDate) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT date, COUNT(*) as cnt
+      FROM workout_logs
+      WHERE completed = 1 AND date >= ? AND date <= ?
+      GROUP BY date
+    ''', [fromDate, toDate]);
+    return {for (final r in rows) r['date'] as String: r['cnt'] as int};
+  }
+
+  Future<List<Map<String, dynamic>>> getWorkoutSummaryForDate(
+      String date) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT wl.workout_name,
+             COALESCE(SUM(CASE WHEN sl.is_completed = 1
+               THEN sl.weight * sl.reps ELSE 0 END), 0) AS total_volume
+      FROM workout_logs wl
+      LEFT JOIN exercise_logs el ON el.workout_log_id = wl.id
+      LEFT JOIN set_logs sl ON sl.exercise_log_id = el.id
+      WHERE wl.date = ? AND wl.completed = 1
+      GROUP BY wl.id, wl.workout_name
+    ''', [date]);
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
   // ─── BODY WEIGHT ────────────────────────────────────────────────────────────
 
   Future<void> logBodyWeight(String date, double weightKg, {String? notes}) async {
