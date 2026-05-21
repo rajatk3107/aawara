@@ -41,11 +41,15 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
   double _quantity = 1.0; // always in servings internally
   bool _adding = false;
   bool _byGrams = false; // false = count/serving mode, true = gram mode
+  int _tab = 0; // 0 = Search, 1 = Presets
+  List<MealPreset> _presets = [];
+  bool _loadingPresets = false;
 
   @override
   void initState() {
     super.initState();
     _search('');
+    _loadPresets();
   }
 
   @override
@@ -95,6 +99,17 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
 
   // Gram step: 10g for small foods, 25g for larger
   double _gramStep(Food food) => food.servingSize <= 50 ? 10 : 25;
+
+  Future<void> _loadPresets() async {
+    setState(() => _loadingPresets = true);
+    final p = await _db.getMealPresets();
+    if (mounted) setState(() { _presets = p; _loadingPresets = false; });
+  }
+
+  Future<void> _logPreset(MealPreset preset) async {
+    await _db.logMealPreset(preset.id, widget.date, widget.meal);
+    if (mounted) Navigator.pop(context, true);
+  }
 
   Future<void> _search(String q) async {
     setState(() => _searching = true);
@@ -226,91 +241,255 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
 
           if (_selected == null) ...[
             const SizedBox(height: 12),
-            // Search field
+            // Tab switcher: Search | Presets
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: TextField(
-                controller: _searchCtrl,
-                autofocus: true,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: 'Search foods…',
-                  hintStyle: const TextStyle(color: Color(0xFF444466)),
-                  prefixIcon: const Icon(Icons.search_rounded,
-                      color: Color(0xFF555577)),
-                  filled: true,
-                  fillColor: const Color(0xFF0D0D1A),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none,
+              child: _buildTabSwitcher(),
+            ),
+            if (_tab == 0) ...[
+              const SizedBox(height: 10),
+              // Search field
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: TextField(
+                  controller: _searchCtrl,
+                  autofocus: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Search foods…',
+                    hintStyle: const TextStyle(color: Color(0xFF444466)),
+                    prefixIcon: const Icon(Icons.search_rounded,
+                        color: Color(0xFF555577)),
+                    filled: true,
+                    fillColor: const Color(0xFF0D0D1A),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                    suffixIcon: _searchCtrl.text.isNotEmpty
+                        ? GestureDetector(
+                            onTap: () {
+                              _searchCtrl.clear();
+                              _search('');
+                            },
+                            child: const Icon(Icons.close_rounded,
+                                color: Color(0xFF444466), size: 18),
+                          )
+                        : null,
                   ),
-                  contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                  suffixIcon: _searchCtrl.text.isNotEmpty
-                      ? GestureDetector(
-                          onTap: () {
-                            _searchCtrl.clear();
-                            _search('');
-                          },
-                          child: const Icon(Icons.close_rounded,
-                              color: Color(0xFF444466), size: 18),
-                        )
-                      : null,
+                  onChanged: _search,
                 ),
-                onChanged: _search,
               ),
-            ),
-            // Quick-action row: create custom + scan barcode
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-              child: Row(
-                children: [
-                  TextButton.icon(
-                    onPressed: _openCustomFood,
-                    icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
-                    label: const Text('Create custom'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFFFFD700),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      textStyle: const TextStyle(fontSize: 13),
+              // Quick-action row: create custom + scan barcode
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                child: Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: _openCustomFood,
+                      icon: const Icon(Icons.add_circle_outline_rounded,
+                          size: 16),
+                      label: const Text('Create custom'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFFFFD700),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        textStyle: const TextStyle(fontSize: 13),
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: _openBarcodeScanner,
-                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 16),
-                    label: const Text('Scan barcode'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF3498DB),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      textStyle: const TextStyle(fontSize: 13),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: _openBarcodeScanner,
+                      icon: const Icon(Icons.qr_code_scanner_rounded, size: 16),
+                      label: const Text('Scan barcode'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: const Color(0xFF3498DB),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        textStyle: const TextStyle(fontSize: 13),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const Divider(height: 1, color: Color(0xFF1E1E35)),
+              const Divider(height: 1, color: Color(0xFF1E1E35)),
+            ],
           ] else
             const SizedBox(height: 8),
 
           Expanded(
             child: _selected != null
                 ? _buildQuantityPicker()
-                : _searching
-                    ? const Center(
-                        child: CircularProgressIndicator(
-                            color: Color(0xFFFFD700), strokeWidth: 2))
-                    : _results.isEmpty
+                : _tab == 1
+                    ? _buildPresetsList()
+                    : _searching
                         ? const Center(
-                            child: Text('No foods found',
-                                style: TextStyle(color: Color(0xFF555577))))
-                        : ListView.builder(
-                            itemCount: _results.length,
-                            itemBuilder: (_, i) => _buildFoodTile(_results[i]),
-                          ),
+                            child: CircularProgressIndicator(
+                                color: Color(0xFFFFD700), strokeWidth: 2))
+                        : _results.isEmpty
+                            ? const Center(
+                                child: Text('No foods found',
+                                    style:
+                                        TextStyle(color: Color(0xFF555577))))
+                            : ListView.builder(
+                                itemCount: _results.length,
+                                itemBuilder: (_, i) =>
+                                    _buildFoodTile(_results[i]),
+                              ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTabSwitcher() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D1A),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      padding: const EdgeInsets.all(3),
+      child: Row(
+        children: [
+          _tabChip('Search', 0, Icons.search_rounded),
+          _tabChip('Presets', 1, Icons.bookmark_rounded),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabChip(String label, int idx, IconData icon) {
+    final active = _tab == idx;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _tab = idx),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF1A1A2E) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon,
+                  size: 14,
+                  color: active
+                      ? const Color(0xFFFFD700)
+                      : const Color(0xFF555577)),
+              const SizedBox(width: 5),
+              Text(label,
+                  style: TextStyle(
+                    color: active ? Colors.white : const Color(0xFF555577),
+                    fontSize: 13,
+                    fontWeight:
+                        active ? FontWeight.w600 : FontWeight.normal,
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPresetsList() {
+    if (_loadingPresets) {
+      return const Center(
+        child: CircularProgressIndicator(
+            color: Color(0xFFFFD700), strokeWidth: 2),
+      );
+    }
+    if (_presets.isEmpty) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.bookmark_outline_rounded,
+                color: Color(0xFF333355), size: 42),
+            SizedBox(height: 12),
+            Text('No saved presets',
+                style:
+                    TextStyle(color: Color(0xFF888899), fontSize: 14)),
+            SizedBox(height: 6),
+            Text(
+              'Log a meal, then tap the bookmark\nicon to save it as a preset.',
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(color: Color(0xFF444466), fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.only(top: 6, bottom: 16),
+      itemCount: _presets.length,
+      itemBuilder: (_, i) => _buildPresetRow(_presets[i]),
+    );
+  }
+
+  Widget _buildPresetRow(MealPreset preset) {
+    return Dismissible(
+      key: Key(preset.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        color: const Color(0xFFE74C3C).withValues(alpha: 0.12),
+        child: const Icon(Icons.delete_outline_rounded,
+            color: Color(0xFFE74C3C), size: 20),
+      ),
+      confirmDismiss: (_) async {
+        await _db.deleteMealPreset(preset.id);
+        _loadPresets();
+        return false;
+      },
+      child: Padding(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(preset.name,
+                      style: const TextStyle(
+                          color: Color(0xFFCCCCDD),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${preset.items.length} items · '
+                    '${preset.totalCalories.round()} kcal · '
+                    'P ${preset.totalProtein.toStringAsFixed(0)}g',
+                    style: const TextStyle(
+                        color: Color(0xFF555577), fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            GestureDetector(
+              onTap: () => _logPreset(preset),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD700),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text('Log',
+                    style: TextStyle(
+                        color: Colors.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13)),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

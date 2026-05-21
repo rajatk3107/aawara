@@ -15,6 +15,7 @@ class _WaterTrackerCardState extends State<WaterTrackerCard> {
   final _db = WorkoutDatabase.instance;
   WaterLog _log = const WaterLog(date: '', glassesDrunk: 0, targetGlasses: 8);
   bool _loading = true;
+  bool _celebrating = false;
 
   @override
   void initState() {
@@ -37,11 +38,22 @@ class _WaterTrackerCardState extends State<WaterTrackerCard> {
   Future<void> _add() async {
     if (_log.glassesDrunk >= _log.targetGlasses + 4) return;
     HapticFeedback.lightImpact();
-    final next = _log.copyWith(glassesDrunk: _log.glassesDrunk + 1);
+    final prev = _log.glassesDrunk;
+    final next = _log.copyWith(glassesDrunk: prev + 1);
     setState(() => _log = next);
     await _db.setWaterGlasses(
         widget.date, next.glassesDrunk,
         targetGlasses: next.targetGlasses);
+    if (prev < next.targetGlasses && next.glassesDrunk >= next.targetGlasses) {
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 80));
+      HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 80));
+      HapticFeedback.heavyImpact();
+      if (mounted) setState(() => _celebrating = true);
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) setState(() => _celebrating = false);
+    }
   }
 
   Future<void> _remove() async {
@@ -55,67 +67,75 @@ class _WaterTrackerCardState extends State<WaterTrackerCard> {
   }
 
   void _editTarget() {
-    final ctrl =
-        TextEditingController(text: _log.targetGlasses.toString());
-    showDialog(
+    showModalBottomSheet(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Daily Water Target',
-            style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 16)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(
-                  color: Color(0xFF3BAFDA),
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-              decoration: const InputDecoration(
-                  border: InputBorder.none,
-                  hintText: '8',
-                  hintStyle: TextStyle(color: Color(0xFF444466))),
-            ),
-            const Text('glasses (250 ml each)',
-                style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
-          ],
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Daily Water Goal',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16)),
+              const SizedBox(height: 4),
+              const Text('glasses (250 ml each)',
+                  style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: List.generate(13, (i) {
+                  final v = i + 4;
+                  final selected = v == _log.targetGlasses;
+                  return GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      if (v == _log.targetGlasses) return;
+                      await _db.updateWaterTarget(widget.date, v);
+                      _load();
+                    },
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFF3BAFDA).withValues(alpha: 0.15)
+                            : const Color(0xFF0D0D1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFF3BAFDA)
+                              : const Color(0xFF1E1E35),
+                          width: selected ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Text(
+                        '$v',
+                        style: TextStyle(
+                          color: selected
+                              ? const Color(0xFF3BAFDA)
+                              : const Color(0xFF888899),
+                          fontWeight: selected
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel',
-                style: TextStyle(color: Color(0xFF888899))),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final v = int.tryParse(ctrl.text);
-              Navigator.pop(ctx);
-              if (v != null && v > 0 && v <= 30) {
-                await _db.updateWaterTarget(widget.date, v);
-                _load();
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF3BAFDA),
-              foregroundColor: Colors.black,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-              elevation: 0,
-            ),
-            child: const Text('Set',
-                style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
       ),
     );
   }
@@ -194,33 +214,47 @@ class _WaterTrackerCardState extends State<WaterTrackerCard> {
           Row(
             children: [
               Expanded(
-                child: Wrap(
-                  spacing: 5,
-                  runSpacing: 5,
-                  children: List.generate(target, (i) {
-                    final filled = i < glasses;
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 22,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        color: filled
-                            ? const Color(0xFF3BAFDA)
-                            : const Color(0xFF0D0D1A),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: filled
-                              ? const Color(0xFF3BAFDA)
-                              : const Color(0xFF1E1E35),
+                child: _celebrating
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 4),
+                        child: Text(
+                          'Goal reached! 🎉',
+                          style: TextStyle(
+                              color: Color(0xFF3BAFDA),
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold),
                         ),
+                      )
+                    : Wrap(
+                        spacing: 5,
+                        runSpacing: 5,
+                        children: List.generate(target, (i) {
+                          final filled = i < glasses;
+                          return GestureDetector(
+                            onLongPress: filled ? _remove : null,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              width: 22,
+                              height: 22,
+                              decoration: BoxDecoration(
+                                color: filled
+                                    ? const Color(0xFF3BAFDA)
+                                    : const Color(0xFF0D0D1A),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: filled
+                                      ? const Color(0xFF3BAFDA)
+                                      : const Color(0xFF1E1E35),
+                                ),
+                              ),
+                              child: filled
+                                  ? const Icon(Icons.water_drop_rounded,
+                                      color: Colors.white, size: 12)
+                                  : null,
+                            ),
+                          );
+                        }),
                       ),
-                      child: filled
-                          ? const Icon(Icons.water_drop_rounded,
-                              color: Colors.white, size: 12)
-                          : null,
-                    );
-                  }),
-                ),
               ),
               const SizedBox(width: 10),
               // Controls

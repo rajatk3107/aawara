@@ -14,6 +14,7 @@ import 'monthly_summary_screen.dart';
 import '../../notes/notes_list_screen.dart';
 import '../../settings_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
+import '../../nutrition/screens/nutrition_screen.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -55,6 +56,9 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   double _todayCalories = 0;
   double _proteinGoalG = 150;
   double _calorieGoalKcal = 2000;
+
+  // Water
+  WaterLog? _todayWater;
 
   bool _loading = true;
 
@@ -100,6 +104,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         _db.getWellnessForDate(todayStr),
         _db.getTodayTotals(todayStr),
         _db.getNutritionGoals(),
+        _db.getWaterLog(todayStr),
       ]);
 
       final logs = results[0] as List<WorkoutLog>;
@@ -111,6 +116,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final todayWellness = results[6] as Map<String, dynamic>?;
       final nutrition = results[7] as NutritionTotals;
       final nutGoals = (results[8] as NutritionGoals?) ?? NutritionGoals.defaults;
+      final waterLog = results[9] as WaterLog;
 
       if (mounted) {
         setState(() {
@@ -126,6 +132,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _todayCalories = nutrition.calories;
           _proteinGoalG = nutGoals.proteinG;
           _calorieGoalKcal = nutGoals.calories;
+          _todayWater = waterLog;
           _loading = false;
         });
 
@@ -1025,6 +1032,16 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       _StatData(Icons.fitness_center_rounded, '$_monthlyCount',
           'Month', const Color(0xFFF472B6)),
       _StatData(todayIcon, todayStatus, 'Today', todayColor),
+      _StatData(
+        Icons.water_drop_rounded,
+        _todayWater != null
+            ? '${_todayWater!.glassesDrunk}/${_todayWater!.targetGlasses}'
+            : '—',
+        'Water',
+        const Color(0xFF4FC3F7),
+        onTap: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const NutritionScreen())),
+      ),
     ];
 
     return Row(
@@ -1035,7 +1052,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           child: GestureDetector(
             onTap: s.onTap,
             child: Container(
-              margin: EdgeInsets.only(right: i < 4 ? 7 : 0),
+              margin: EdgeInsets.only(right: i < 5 ? 7 : 0),
               padding: const EdgeInsets.symmetric(vertical: 11),
               decoration: BoxDecoration(
                 color: const Color(0xFF1A1A2E),

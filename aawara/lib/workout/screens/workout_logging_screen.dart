@@ -51,6 +51,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   int _restRemaining = 0;
   int _restTotal = 90;
   int _restDefault = 90; // loaded from prefs, user-configurable
+  bool _restExpanded = false;
+  bool _restDone = false;
+  final Map<String, int> _exerciseRestOverrides = {};
 
   @override
   void initState() {
@@ -160,6 +163,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   Future<void> _loadDetails() async {
     setState(() => _loading = true);
+    final prefs = await SharedPreferences.getInstance();
     for (final exLog in _log.exercises) {
       final ex = await _db.getExerciseById(exLog.exerciseId);
       if (ex != null) _exercises[exLog.id] = ex;
@@ -172,6 +176,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
         }
       }
+
+      final override = prefs.getInt('rest_timer_${exLog.exerciseId}');
+      if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -200,34 +207,160 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   // ─── Rest Timer ───────────────────────────────────────────────────────────────
 
-  void _startRest(int seconds) {
+  void _startRest(int seconds, {String? exerciseId}) {
     _restTimer?.cancel();
     setState(() {
       _restRemaining = seconds;
       _restTotal = seconds;
+      _restDone = false;
+      _restExpanded = false;
     });
     _restTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
+      final next = _restRemaining - 1;
       setState(() {
-        if (_restRemaining > 0) {
-          _restRemaining--;
-          if (_restRemaining == 0) {
-            HapticFeedback.heavyImpact();
-            Future.delayed(const Duration(milliseconds: 200),
-                HapticFeedback.heavyImpact);
-            Future.delayed(const Duration(milliseconds: 400),
-                HapticFeedback.heavyImpact);
-          }
-        } else {
-          t.cancel();
-        }
+        _restRemaining = next < 0 ? 0 : next;
+        if (next <= 0) _restDone = true;
       });
+      if (next <= 0) {
+        t.cancel();
+        HapticFeedback.heavyImpact();
+        Future.delayed(const Duration(milliseconds: 200), HapticFeedback.heavyImpact);
+        Future.delayed(const Duration(milliseconds: 400), HapticFeedback.heavyImpact);
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) _cancelRest();
+        });
+      }
     });
   }
 
   void _cancelRest() {
     _restTimer?.cancel();
-    setState(() => _restRemaining = 0);
+    setState(() {
+      _restRemaining = 0;
+      _restDone = false;
+      _restExpanded = false;
+    });
+  }
+
+  int _getRestSeconds(String exerciseId) =>
+      _exerciseRestOverrides[exerciseId] ?? _restDefault;
+
+  String _fmtRestTime(int seconds) {
+    if (seconds >= 60) {
+      final m = seconds ~/ 60;
+      final s = seconds % 60;
+      return s > 0 ? '${m}m ${s}s' : '${m}m';
+    }
+    return '${seconds}s';
+  }
+
+  Future<void> _saveExerciseRest(String exerciseId, int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('rest_timer_$exerciseId', seconds);
+    if (mounted) setState(() => _exerciseRestOverrides[exerciseId] = seconds);
+  }
+
+  Future<void> _clearExerciseRest(String exerciseId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('rest_timer_$exerciseId');
+    if (mounted) setState(() => _exerciseRestOverrides.remove(exerciseId));
+  }
+
+  void _showExerciseRestPicker(ExerciseLog exLog) {
+    const options = [60, 90, 120, 180, 240];
+    final exerciseId = exLog.exerciseId;
+    final current = _exerciseRestOverrides[exerciseId];
+    final exName = _exercises[exLog.id]?.name ?? 'Exercise';
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Rest Timer · $exName',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Custom rest for this exercise across all sessions.',
+              style: TextStyle(color: Color(0xFF555577), fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                ...options.map((s) {
+                  final label = _fmtRestTime(s);
+                  final selected = s == current;
+                  return GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _saveExerciseRest(exerciseId, s);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+                            : const Color(0xFF0D0D1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFFFFD700)
+                              : const Color(0xFF1E1E35),
+                        ),
+                      ),
+                      child: Text(label,
+                          style: TextStyle(
+                              color: selected
+                                  ? const Color(0xFFFFD700)
+                                  : const Color(0xFFCCCCDD),
+                              fontWeight: selected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              fontSize: 14)),
+                    ),
+                  );
+                }),
+                if (current != null)
+                  GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _clearExerciseRest(exerciseId);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0D1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color:
+                                const Color(0xFFE74C3C).withValues(alpha: 0.4)),
+                      ),
+                      child: const Text('Use default',
+                          style: TextStyle(
+                              color: Color(0xFFE74C3C), fontSize: 14)),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showRestDurationPicker() {
@@ -308,7 +441,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       if (idx >= 0) exLog.sets[idx] = updated;
     });
     if (next && !_log.completed) {
-      _startRest(_restDefault);
+      _startRest(_getRestSeconds(exLog.exerciseId), exerciseId: exLog.exerciseId);
       _checkPR(exLog, updated);
       _checkOverloadNudge(exLog);
     }
@@ -532,6 +665,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
       }
     }
+    final prefs = await SharedPreferences.getInstance();
+    final override = prefs.getInt('rest_timer_${picked.id}');
+    if (override != null) _exerciseRestOverrides[picked.id] = override;
     setState(() {
       _log.exercises.add(exLog);
       _expandedId = exLog.id;
@@ -779,7 +915,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_restRemaining > 0) _buildRestTimer(),
+            if (_restRemaining > 0 || _restDone) _buildRestTimer(),
             _buildBottomBar(),
           ],
         ),
@@ -928,6 +1064,8 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                 : () => setState(() {
                       _expandedId = isExpanded ? null : exLog.id;
                     }),
+            onLongPress:
+                _log.completed ? null : () => _showExerciseRestPicker(exLog),
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
@@ -993,6 +1131,27 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                           '${ex?.muscleGroup ?? ''} · ${exLog.sets.length} set${exLog.sets.length == 1 ? '' : 's'}${isCardio ? ' · Cardio' : ''}',
                           style: const TextStyle(color: Color(0xFF555577), fontSize: 11),
                         ),
+                        if (_exerciseRestOverrides
+                            .containsKey(exLog.exerciseId))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.timer_outlined,
+                                    color: Color(0xFF887744), size: 9),
+                                const SizedBox(width: 2),
+                                Text(
+                                  _fmtRestTime(_exerciseRestOverrides[
+                                      exLog.exerciseId]!),
+                                  style: const TextStyle(
+                                      color: Color(0xFF887744),
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1566,88 +1725,113 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     final progress = _restTotal > 0 ? _restRemaining / _restTotal : 0.0;
     final mins = _restRemaining ~/ 60;
     final secs = _restRemaining % 60;
-    final timeStr = mins > 0 ? '$mins:${secs.toString().padLeft(2, '0')}' : '${secs}s';
-    final done = _restRemaining == 0;
+    final timeStr =
+        mins > 0 ? '$mins:${secs.toString().padLeft(2, '0')}' : '${secs}s';
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: done
-              ? const Color(0xFF2ECC71).withValues(alpha: 0.5)
-              : const Color(0xFF3498DB).withValues(alpha: 0.3),
+    return GestureDetector(
+      onTap:
+          _restDone ? null : () => setState(() => _restExpanded = !_restExpanded),
+      onLongPress: _restDone ? null : _showRestDurationPicker,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          color: _restDone
+              ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+              : const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _restDone
+                ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                : const Color(0xFF2A2A45),
+          ),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(
-                done ? Icons.check_circle_outline : Icons.timer_outlined,
-                color: done ? const Color(0xFF2ECC71) : const Color(0xFF3498DB),
-                size: 15,
-              ),
-              const SizedBox(width: 7),
-              GestureDetector(
-                onLongPress: done ? null : _showRestDurationPicker,
-                child: Text(
-                  done ? 'Rest done — go!' : 'Rest · ${_restDefault}s default',
-                  style: TextStyle(
-                    color: done ? const Color(0xFF2ECC71) : Colors.white54,
-                    fontSize: 12,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Text('💤', style: TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+                const Text('Rest',
+                    style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500)),
+                const SizedBox(width: 8),
+                Text(
+                  _restDone ? 'Done!' : timeStr,
+                  style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-              ),
-              const Spacer(),
-              if (!done) ...[
-                Text(timeStr,
-                    style: const TextStyle(
-                        color: Color(0xFF3498DB),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15)),
+                const SizedBox(width: 10),
+                if (!_restDone)
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 4,
+                        backgroundColor: const Color(0xFF2A2A45),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          progress > 0.35
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.7)
+                              : const Color(0xFFE74C3C),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  const Spacer(),
                 const SizedBox(width: 10),
                 GestureDetector(
-                  onTap: () => _startRest(_restRemaining + 30),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3498DB).withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
+                  onTap: _cancelRest,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      'Skip',
+                      style: TextStyle(
+                        color: _restDone
+                            ? const Color(0xFFFFD700)
+                            : const Color(0xFF555577),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                    child: const Text('+30s',
-                        style: TextStyle(
-                            color: Color(0xFF3498DB),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600)),
                   ),
                 ),
-                const SizedBox(width: 8),
               ],
-              GestureDetector(
-                onTap: _cancelRest,
-                child: const Icon(Icons.close, color: Colors.white24, size: 15),
+            ),
+            if (_restExpanded && !_restDone) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _RestNudgeBtn(
+                    label: '−15s',
+                    onTap: () => setState(() {
+                      _restRemaining = (_restRemaining - 15).clamp(5, 9999);
+                    }),
+                  ),
+                  const SizedBox(width: 16),
+                  _RestNudgeBtn(
+                    label: '+15s',
+                    onTap: () => setState(() {
+                      _restRemaining += 15;
+                      _restTotal += 15;
+                    }),
+                  ),
+                ],
               ),
             ],
-          ),
-          if (!done) ...[
-            const SizedBox(height: 5),
-            LinearProgressIndicator(
-              value: progress,
-              backgroundColor: const Color(0xFF0D0D1A),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                progress > 0.5
-                    ? const Color(0xFF3498DB)
-                    : const Color(0xFFF39C12),
-              ),
-              borderRadius: BorderRadius.circular(4),
-              minHeight: 2,
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1790,6 +1974,32 @@ class _ReadOnlyValue extends StatelessWidget {
         text,
         textAlign: TextAlign.center,
         style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 13),
+      );
+}
+
+// ─── Rest nudge button ────────────────────────────────────────────────────────
+
+class _RestNudgeBtn extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _RestNudgeBtn({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D1A),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF2A2A45)),
+          ),
+          child: Text(label,
+              style: const TextStyle(
+                  color: Color(0xFFCCCCDD),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+        ),
       );
 }
 
