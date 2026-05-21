@@ -289,7 +289,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   }
 
   void _showDayOptions() {
-    final hasLog = _dayLogs.isNotEmpty;
+    final logs = List<WorkoutLog>.from(_dayLogs);
+    final hasLog = logs.isNotEmpty;
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -298,8 +301,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           color: Color(0xFF1A1A2E),
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        padding: EdgeInsets.fromLTRB(
-            20, 16, 20, 16 + MediaQuery.of(context).padding.bottom),
+        padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + bottomPad),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -331,36 +333,70 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 20),
-            if (hasLog)
-              _OptionTile(
-                icon: Icons.delete_sweep_outlined,
-                label: 'Clear Workout Log',
-                subtitle: 'Remove all logged sessions for this day',
-                color: const Color(0xFFE74C3C),
-                onTap: () async {
-                  Navigator.pop(context);
-                  final confirm = await _confirmDialog(
-                    'Clear Workout Log?',
-                    'This will permanently delete all workout sessions for this day.',
-                    confirmLabel: 'Clear',
-                    confirmColor: const Color(0xFFE74C3C),
-                  );
-                  if (confirm == true) {
-                    for (final l in _dayLogs) {
-                      await _db.deleteWorkoutLog(l.id);
-                    }
-                    _load();
-                  }
-                },
-              )
-            else
+            if (!hasLog)
               Padding(
                 padding: const EdgeInsets.only(top: 8, bottom: 8),
                 child: Text(
                   'No workout logged on this day.',
                   style: const TextStyle(color: Color(0xFF555577), fontSize: 14),
                 ),
-              ),
+              )
+            else ...[
+              // Individual session delete tiles
+              ...logs.asMap().entries.map((e) {
+                final idx = e.key;
+                final log = e.value;
+                final sessionLabel = logs.length > 1
+                    ? 'Session ${idx + 1} · ${log.workoutName}'
+                    : log.workoutName;
+                return _OptionTile(
+                  icon: Icons.delete_outline_rounded,
+                  label: 'Delete $sessionLabel',
+                  subtitle: log.completed
+                      ? '${log.totalSets} sets · ${log.totalVolume.toStringAsFixed(0)} kg'
+                      : 'In progress',
+                  color: const Color(0xFFE74C3C),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final confirm = await _confirmDialog(
+                      'Delete Session?',
+                      'This will permanently delete "$sessionLabel".',
+                      confirmLabel: 'Delete',
+                      confirmColor: const Color(0xFFE74C3C),
+                    );
+                    if (confirm == true) {
+                      await _db.deleteWorkoutLog(log.id);
+                      _load();
+                    }
+                  },
+                );
+              }),
+              // Clear All — only shown when multiple sessions exist
+              if (logs.length > 1) ...[
+                const Divider(color: Color(0xFF1E1E35), height: 24),
+                _OptionTile(
+                  icon: Icons.delete_sweep_outlined,
+                  label: 'Clear All Sessions',
+                  subtitle: 'Remove all ${logs.length} sessions for this day',
+                  color: const Color(0xFFE74C3C),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final confirm = await _confirmDialog(
+                      'Clear All Sessions?',
+                      'This will permanently delete all ${logs.length} workout sessions for this day.',
+                      confirmLabel: 'Clear All',
+                      confirmColor: const Color(0xFFE74C3C),
+                    );
+                    if (confirm == true) {
+                      for (final l in logs) {
+                        await _db.deleteWorkoutLog(l.id);
+                      }
+                      _load();
+                    }
+                  },
+                ),
+              ],
+            ],
           ],
         ),
       ),
