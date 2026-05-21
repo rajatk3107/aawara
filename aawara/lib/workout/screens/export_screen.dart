@@ -44,6 +44,7 @@ class _ExportScreenState extends State<ExportScreen> {
 
   bool _exporting = false;
   bool _exportingFullBackup = false;
+  bool _exportingAI = false;
   bool _importing = false;
   bool _loadingPreview = false;
 
@@ -154,6 +155,35 @@ class _ExportScreenState extends State<ExportScreen> {
       }
     } finally {
       if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ─── AI Export ───────────────────────────────────────────────────────────
+
+  Future<void> _exportForAI() async {
+    setState(() => _exportingAI = true);
+    try {
+      final content = await _db.exportForAI();
+      final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+      final fileName = 'aawara_ai_export_$stamp.md';
+      final tmpDir = await getTemporaryDirectory();
+      final file = File('${tmpDir.path}/$fileName');
+      await file.writeAsString(content, encoding: utf8);
+      if (!mounted) return;
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: 'text/markdown')],
+        subject: 'Aawara — AI Analysis Data',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Export failed: $e'),
+          backgroundColor: const Color(0xFFE74C3C),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _exportingAI = false);
     }
   }
 
@@ -485,6 +515,9 @@ class _ExportScreenState extends State<ExportScreen> {
           const SizedBox(height: 20),
           _buildPreviewCard(),
           const SizedBox(height: 28),
+          _sectionLabel('AI ANALYSIS'),
+          _buildAIExportCard(),
+          const SizedBox(height: 28),
           _sectionLabel('FULL BACKUP'),
           _buildFullBackupCard(),
           const SizedBox(height: 28),
@@ -556,6 +589,81 @@ class _ExportScreenState extends State<ExportScreen> {
           ),
         ),
       );
+
+  // ─── AI export card ──────────────────────────────────────────────────────
+
+  Widget _buildAIExportCard() {
+    return GestureDetector(
+      onTap: _exportingAI ? null : _exportForAI,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF12121F),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _exportingAI
+                ? const Color(0xFF333355)
+                : const Color(0xFF9B59B6).withValues(alpha: 0.5),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                gradient: _exportingAI
+                    ? null
+                    : const LinearGradient(
+                        colors: [Color(0xFF9B59B6), Color(0xFF6C3483)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                color: _exportingAI ? const Color(0xFF1A1A2E) : null,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: _exportingAI
+                  ? const Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Color(0xFF9B59B6)),
+                      ),
+                    )
+                  : const Icon(Icons.auto_awesome_rounded,
+                      color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Export to AI',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                  SizedBox(height: 3),
+                  Text(
+                    'Generates a Markdown file with all your workouts, nutrition, wellness & PRs — paste into ChatGPT, Gemini, or Claude for personalised insights',
+                    style: TextStyle(color: Color(0xFF555577), fontSize: 12, height: 1.4),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Icon(Icons.auto_awesome_rounded,
+                color: Color(0xFF9B59B6), size: 16),
+          ],
+        ),
+      ),
+    );
+  }
 
   // ─── Full backup card ─────────────────────────────────────────────────────
 

@@ -1836,6 +1836,285 @@ class WorkoutDatabase {
     return (imported: imported, skipped: skipped);
   }
 
+  // ─── AI EXPORT ──────────────────────────────────────────────────────────────
+
+  /// Generates a human-readable Markdown document containing all user data,
+  /// formatted for pasting into any AI chatbot for personalised analysis.
+  Future<String> exportForAI() async {
+    final db = await database;
+    final today = _fmt(DateTime.now());
+    final sb = StringBuffer();
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    sb.writeln('# Aawara Fitness & Nutrition Data');
+    sb.writeln('> Generated: $today');
+    sb.writeln('> Paste this into any AI assistant to get personalised analysis of your fitness, nutrition, and wellness trends.');
+    sb.writeln();
+
+    // ── Overview ──────────────────────────────────────────────────────────────
+    final totalWorkouts = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM workout_logs WHERE completed = 1')) ?? 0;
+    final totalWorkoutMins = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT SUM(duration_seconds) FROM workout_logs WHERE completed = 1')) ?? 0;
+    final totalVolume = (await db.rawQuery(
+        'SELECT SUM(weight * reps) as v FROM set_logs WHERE weight IS NOT NULL AND reps IS NOT NULL'
+    )).first['v'];
+    final bwCount = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM body_weight_logs')) ?? 0;
+    final nutritionDays = Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM nutrition_logs')) ?? 0;
+
+    sb.writeln('## Overview');
+    sb.writeln('| Metric | Value |');
+    sb.writeln('|--------|-------|');
+    sb.writeln('| Completed workouts | $totalWorkouts |');
+    sb.writeln('| Total training time | ${(totalWorkoutMins / 60).toStringAsFixed(0)} hours |');
+    if (totalVolume != null) {
+      sb.writeln('| Total volume lifted | ${((totalVolume as num).toDouble() / 1000).toStringAsFixed(1)} tonnes |');
+    }
+    sb.writeln('| Body weight entries | $bwCount |');
+    sb.writeln('| Nutrition days logged | $nutritionDays |');
+    sb.writeln();
+
+    // ── Nutrition Goals ───────────────────────────────────────────────────────
+    final goals = await db.query('nutrition_goals', limit: 1);
+    if (goals.isNotEmpty) {
+      final g = goals.first;
+      sb.writeln('## Nutrition Goals');
+      sb.writeln('| Calories | Protein | Carbs | Fat |');
+      sb.writeln('|----------|---------|-------|-----|');
+      sb.writeln('| ${(g['calories'] as num).round()} kcal | ${(g['protein_g'] as num).round()} g | ${(g['carbs_g'] as num).round()} g | ${(g['fat_g'] as num).round()} g |');
+      sb.writeln();
+    }
+
+    // ── Body Weight ───────────────────────────────────────────────────────────
+    final bwLogs = await db.query('body_weight_logs', orderBy: 'date ASC');
+    if (bwLogs.isNotEmpty) {
+      sb.writeln('## Body Weight Log');
+      final first = bwLogs.first;
+      final last = bwLogs.last;
+      final firstW = (first['weight_kg'] as num).toDouble();
+      final lastW = (last['weight_kg'] as num).toDouble();
+      final diff = lastW - firstW;
+      sb.writeln('**Start:** ${firstW.toStringAsFixed(1)} kg (${first['date']}) → '
+          '**Current:** ${lastW.toStringAsFixed(1)} kg (${last['date']}) | '
+          '**Change:** ${diff >= 0 ? '+' : ''}${diff.toStringAsFixed(1)} kg');
+      sb.writeln();
+      sb.writeln('| Date | Weight (kg) |');
+      sb.writeln('|------|------------|');
+      for (final row in bwLogs) {
+        sb.writeln('| ${row['date']} | ${(row['weight_kg'] as num).toStringAsFixed(1)} |');
+      }
+      sb.writeln();
+    }
+
+    // ── Exercise Personal Records ─────────────────────────────────────────────
+    final prs = await db.rawQuery('''
+      SELECT ep.best_1rm, ep.date, e.name
+      FROM exercise_prs ep
+      JOIN exercises e ON e.id = ep.exercise_id
+      ORDER BY ep.best_1rm DESC
+    ''');
+    if (prs.isNotEmpty) {
+      sb.writeln('## Personal Records (Best Estimated 1RM)');
+      sb.writeln('| Exercise | Best 1RM (kg) | Date |');
+      sb.writeln('|----------|--------------|------|');
+      for (final pr in prs) {
+        sb.writeln('| ${pr['name']} | ${(pr['best_1rm'] as num).toStringAsFixed(1)} | ${pr['date']} |');
+      }
+      sb.writeln();
+    }
+
+    // ── Workout History ───────────────────────────────────────────────────────
+    final wLogs = await db.query('workout_logs', orderBy: 'date DESC');
+    if (wLogs.isNotEmpty) {
+      sb.writeln('## Workout History');
+      for (final wRow in wLogs) {
+        final wId = wRow['id'] as String;
+        final durationMin = wRow['duration_seconds'] != null
+            ? ' · ${((wRow['duration_seconds'] as int) / 60).round()} min'
+            : '';
+        final completed = (wRow['completed'] as int) == 1;
+        sb.writeln('### ${wRow['date']} — ${wRow['workout_name']}$durationMin${completed ? '' : ' (incomplete)'}');
+
+        final exLogs = await db.query('exercise_logs',
+            where: 'workout_log_id = ?', whereArgs: [wId], orderBy: 'order_index ASC');
+        for (final exRow in exLogs) {
+          final exId = exRow['exercise_id'] as String;
+          final exData = await db.query('exercises', where: 'id = ?', whereArgs: [exId], limit: 1);
+          final exName = exData.isNotEmpty ? exData.first['name'] as String : exId;
+          final sets = await db.query('set_logs',
+              where: 'exercise_log_id = ?', whereArgs: [exRow['id']], orderBy: 'set_number ASC');
+
+          if (sets.isEmpty) {
+            sb.writeln('- **$exName** — no sets logged');
+            continue;
+          }
+
+          // Check if cardio (no weight/reps, has duration)
+          final isCardio = sets.first['weight'] == null && sets.first['duration_seconds'] != null;
+          sb.writeln('- **$exName**');
+          if (isCardio) {
+            for (final s in sets) {
+              final dur = s['duration_seconds'] != null
+                  ? '${((s['duration_seconds'] as int) / 60).round()} min' : '';
+              final dist = s['distance_km'] != null ? ' · ${s['distance_km']} km' : '';
+              final speed = s['speed'] != null ? ' · ${s['speed']} km/h' : '';
+              sb.writeln('  - Set ${s['set_number']}: $dur$dist$speed');
+            }
+          } else {
+            for (final s in sets) {
+              final w = s['weight'] != null ? '${s['weight']} kg' : '—';
+              final r = s['reps'] != null ? '${s['reps']} reps' : '—';
+              final done = (s['is_completed'] as int? ?? 0) == 1 ? ' ✓' : '';
+              sb.writeln('  - Set ${s['set_number']}: $w × $r$done');
+            }
+          }
+        }
+        sb.writeln();
+      }
+    }
+
+    // ── Nutrition ─────────────────────────────────────────────────────────────
+    final nutLogs = await db.query('nutrition_logs', orderBy: 'date DESC');
+    if (nutLogs.isNotEmpty) {
+      // Daily macro summaries
+      sb.writeln('## Nutrition — Daily Summaries');
+
+      // Compute averages
+      double sumCal = 0, sumPro = 0, sumCarb = 0, sumFat = 0;
+      final summaryRows = <Map<String, dynamic>>[];
+
+      for (final nl in nutLogs) {
+        final entries = await db.rawQuery('''
+          SELECT ne.quantity, ne.meal_type,
+                 f.name, f.calories, f.protein_g, f.carbs_g, f.fat_g, f.serving_size
+          FROM nutrition_entries ne
+          JOIN foods f ON f.id = ne.food_id
+          WHERE ne.log_id = ?
+        ''', [nl['id']]);
+
+        double cal = 0, pro = 0, carb = 0, fat = 0;
+        for (final e in entries) {
+          final q = (e['quantity'] as num).toDouble();
+          final s = (e['serving_size'] as num).toDouble();
+          final mult = (q * s) / 100.0;
+          cal += (e['calories'] as num).toDouble() * mult;
+          pro += (e['protein_g'] as num).toDouble() * mult;
+          carb += (e['carbs_g'] as num).toDouble() * mult;
+          fat += (e['fat_g'] as num).toDouble() * mult;
+        }
+        sumCal += cal; sumPro += pro; sumCarb += carb; sumFat += fat;
+        summaryRows.add({
+          'date': nl['date'],
+          'cal': cal, 'pro': pro, 'carb': carb, 'fat': fat,
+          'entries': entries,
+        });
+      }
+
+      final n = nutLogs.length;
+      sb.writeln('**Daily averages over $n days:** '
+          '${(sumCal / n).round()} kcal | Protein ${(sumPro / n).round()} g | '
+          'Carbs ${(sumCarb / n).round()} g | Fat ${(sumFat / n).round()} g');
+      sb.writeln();
+      sb.writeln('| Date | Calories | Protein (g) | Carbs (g) | Fat (g) |');
+      sb.writeln('|------|----------|-------------|-----------|---------|');
+      for (final row in summaryRows) {
+        sb.writeln('| ${row['date']} | ${(row['cal'] as double).round()} | '
+            '${(row['pro'] as double).toStringAsFixed(1)} | '
+            '${(row['carb'] as double).toStringAsFixed(1)} | '
+            '${(row['fat'] as double).toStringAsFixed(1)} |');
+      }
+      sb.writeln();
+
+      // Detailed per-meal food log
+      sb.writeln('## Nutrition — Detailed Food Log');
+      const mealOrder = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+      for (final row in summaryRows) {
+        sb.writeln('### ${row['date']}');
+        final entries = row['entries'] as List<Map<String, dynamic>>;
+        final byMeal = <String, List<Map<String, dynamic>>>{};
+        for (final e in entries) {
+          (byMeal[e['meal_type'] as String] ??= []).add(e);
+        }
+        for (final meal in mealOrder) {
+          if (!byMeal.containsKey(meal)) continue;
+          sb.writeln('**$meal**');
+          for (final e in byMeal[meal]!) {
+            final q = (e['quantity'] as num).toDouble();
+            final s = (e['serving_size'] as num).toDouble();
+            final grams = (q * s).round();
+            final cal = ((e['calories'] as num).toDouble() * q * s / 100).round();
+            final pro = ((e['protein_g'] as num).toDouble() * q * s / 100).toStringAsFixed(1);
+            sb.writeln('- ${e['name']} — ${grams}g · $cal kcal · ${pro}g protein');
+          }
+        }
+        sb.writeln();
+      }
+    }
+
+    // ── Water Intake ──────────────────────────────────────────────────────────
+    final water = await db.query('water_logs', orderBy: 'date ASC');
+    if (water.isNotEmpty) {
+      sb.writeln('## Water Intake');
+      final avgGlasses = water.fold(0, (s, r) => s + (r['glasses_drunk'] as int)) / water.length;
+      sb.writeln('**Average:** ${avgGlasses.toStringAsFixed(1)} glasses/day '
+          '(${(avgGlasses * 0.25).toStringAsFixed(2)} L/day)');
+      sb.writeln();
+      sb.writeln('| Date | Glasses | Target | Litres |');
+      sb.writeln('|------|---------|--------|--------|');
+      for (final w in water) {
+        final g = w['glasses_drunk'] as int;
+        final t = w['target_glasses'] as int;
+        sb.writeln('| ${w['date']} | $g | $t | ${(g * 0.25).toStringAsFixed(2)} |');
+      }
+      sb.writeln();
+    }
+
+    // ── Wellness Log ──────────────────────────────────────────────────────────
+    final wellness = await db.query('wellness_logs', orderBy: 'date DESC');
+    if (wellness.isNotEmpty) {
+      sb.writeln('## Wellness Log');
+      final avgSleep = wellness.fold(0.0, (s, r) => s + (r['sleep_hours'] as num).toDouble()) / wellness.length;
+      final avgEnergy = wellness.fold(0.0, (s, r) => s + (r['energy'] as int)) / wellness.length;
+      final avgSore = wellness.fold(0.0, (s, r) => s + (r['soreness'] as int)) / wellness.length;
+      sb.writeln('**Averages:** Sleep ${avgSleep.toStringAsFixed(1)} hrs | '
+          'Energy ${avgEnergy.toStringAsFixed(1)}/5 | Soreness ${avgSore.toStringAsFixed(1)}/5');
+      sb.writeln();
+      sb.writeln('| Date | Sleep (hrs) | Energy (1–5) | Soreness (1–5) | Notes |');
+      sb.writeln('|------|-------------|--------------|----------------|-------|');
+      for (final w in wellness) {
+        final notes = (w['notes'] as String? ?? '').replaceAll('|', '/');
+        sb.writeln('| ${w['date']} | ${(w['sleep_hours'] as num).toStringAsFixed(1)} | '
+            '${w['energy']} | ${w['soreness']} | $notes |');
+      }
+      sb.writeln();
+    }
+
+    // ── Achievements ──────────────────────────────────────────────────────────
+    final ach = await db.query('achievements_unlocked', orderBy: 'unlocked_at ASC');
+    if (ach.isNotEmpty) {
+      sb.writeln('## Achievements Unlocked');
+      for (final a in ach) {
+        sb.writeln('- ${a['achievement_id']} (${(a['unlocked_at'] as String).split('T').first})');
+      }
+      sb.writeln();
+    }
+
+    // ── Suggested prompts ─────────────────────────────────────────────────────
+    sb.writeln('---');
+    sb.writeln('## Suggested Questions to Ask');
+    sb.writeln('- What are my strength progress trends over the last few months?');
+    sb.writeln('- Am I eating enough protein relative to my training volume?');
+    sb.writeln('- Are there any patterns between my sleep/energy and workout performance?');
+    sb.writeln('- Which muscle groups am I training most and least frequently?');
+    sb.writeln('- What does my calorie intake look like on training vs. rest days?');
+    sb.writeln('- How is my body weight trending relative to my nutrition?');
+    sb.writeln('- Where should I focus to improve my overall fitness?');
+
+    return sb.toString();
+  }
+
   // ─── FULL BACKUP EXPORT ─────────────────────────────────────────────────────
 
   /// Exports ALL user-created data as a single JSON string (schema_version: 3).
