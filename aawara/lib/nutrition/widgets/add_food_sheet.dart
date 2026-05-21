@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
 import '../screens/add_custom_food_screen.dart';
+import '../screens/barcode_scanner_screen.dart';
 
 Future<bool> showAddFoodSheet(
   BuildContext context, {
@@ -175,19 +176,35 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                 onChanged: _search,
               ),
             ),
-            // Custom food link
+            // Quick-action row: create custom + scan barcode
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 16, 4),
-              child: TextButton.icon(
-                onPressed: _openCustomFood,
-                icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
-                label: const Text('Create custom food'),
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFFFFD700),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  textStyle: const TextStyle(fontSize: 13),
-                ),
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+              child: Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _openCustomFood,
+                    icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
+                    label: const Text('Create custom'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFFFFD700),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _openBarcodeScanner,
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 16),
+                    label: const Text('Scan barcode'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF3498DB),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      textStyle: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
               ),
             ),
             const Divider(height: 1, color: Color(0xFF1E1E35)),
@@ -416,6 +433,20 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                 color: Color(0xFF555577), fontSize: 11)),
       ],
     );
+  }
+
+  Future<void> _openBarcodeScanner() async {
+    final added = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BarcodeScannerScreen(
+          date: widget.date,
+          meal: widget.meal,
+        ),
+      ),
+    );
+    // Scanner already added the entry to the log — close this sheet too.
+    if (added == true && mounted) Navigator.pop(context, true);
   }
 
   Future<void> _openCustomFood() async {

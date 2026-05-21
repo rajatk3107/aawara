@@ -637,6 +637,11 @@ class WorkoutDatabase {
     ('Kadai Paneer', 210, 10.5, 8.0, 16.0, 2.0, 100, 'g'),
     ('Bhindi Masala', 95, 2.8, 11.0, 4.5, 3.2, 100, 'g'),
     ('Baingan Bharta', 90, 2.5, 10.0, 4.5, 3.5, 100, 'g'),
+    ('Kadhi (plain, no pakora)', 85, 3.5, 8.0, 4.5, 0.5, 100, 'g'),
+    ('Kadhi Pakora', 145, 5.5, 14.0, 8.0, 1.0, 100, 'g'),
+    ('Paneer Bhurji', 220, 13.0, 5.5, 16.5, 1.0, 100, 'g'),
+    ('Egg Bhurji', 185, 12.5, 3.0, 14.0, 0.5, 100, 'g'),
+    ('Egg Bhurji (1 egg serving)', 148, 10.0, 2.4, 11.2, 0.4, 80, 'g'),
     ('Aloo Gobi', 110, 2.5, 16.0, 4.0, 2.5, 100, 'g'),
     ('Saag (mustard greens)', 105, 4.5, 10.0, 5.5, 4.0, 100, 'g'),
     // ── Snacks ─────────────────────────────────────────────────────────────────
@@ -2213,6 +2218,18 @@ class WorkoutDatabase {
     final db = await database;
     await db.insert('foods', food.toMap());
     return food;
+  }
+
+  Future<Food?> getFoodByExactName(String name) async {
+    final db = await database;
+    final rows = await db.query(
+      'foods',
+      where: 'LOWER(name) = LOWER(?)',
+      whereArgs: [name.trim()],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Food.fromMap(rows.first);
   }
 
   Future<List<DailyNutritionSummary>> getNutritionHistory(
