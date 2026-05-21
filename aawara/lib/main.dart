@@ -58,6 +58,9 @@ class _LifecycleWrapperState extends State<_LifecycleWrapper>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // resumed fires when app comes back from background.
+    // inactive → active sequence (initial open) is covered by the
+    // postFrameCallback in StepTrackingService.initialize().
     if (state == AppLifecycleState.resumed) {
       StepTrackingService.refreshStream();
     }

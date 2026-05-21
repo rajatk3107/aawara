@@ -23,6 +23,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/scheduler.dart' hide Priority;
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -48,7 +49,9 @@ class StepTrackingService {
     if (Platform.isAndroid) {
       await _initAndroid();
     }
-    // iOS: no background init needed — reads HealthKit on demand
+    // Push current step count to stream after first frame so widgets
+    // that subscribe in initState() receive the value immediately.
+    SchedulerBinding.instance.addPostFrameCallback((_) => refreshStream());
   }
 
   static Future<bool> isEnabled() async {
@@ -85,12 +88,17 @@ class StepTrackingService {
     return row != null ? (row['steps'] as num).toInt() : 0;
   }
 
-  // Push latest step count to UI stream (called on app resume)
+  // Push latest step count to UI stream — called on app open and resume.
+  // On iOS this also writes to the DB so the progress chart stays current.
   static Future<void> refreshStream() async {
     if (!await isEnabled()) return;
-    final steps = await getTodaySteps();
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
+    final steps = await getTodaySteps();
+    // On iOS persist the fresh HealthKit value so history is up-to-date
+    if (Platform.isIOS && steps > 0) {
+      await WorkoutDatabase.instance.upsertStepLog(_todayDate(), steps, goal);
+    }
     _stepController.add(StepUpdate(steps: steps, goal: goal));
   }
 
