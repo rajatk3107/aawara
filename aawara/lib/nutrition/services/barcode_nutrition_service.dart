@@ -23,19 +23,15 @@ class BarcodeNutritionService {
   Future<BarcodeScanResult> lookup(String barcode) async {
     final db = WorkoutDatabase.instance;
 
-    // ── 1. Check scan cache ───────────────────────────────────────────────────
+    // ── 1. Check scan cache — only skip API for confirmed 'found' entries ────
+    // 'not_found' entries still re-query: the product may have gained nutrition
+    // data on OFF since last scan (or was rejected due to a prior normalizer bug).
     final cached = await db.getScanCache(barcode);
-    if (cached != null) {
-      if (cached.status == 'not_found') {
+    if (cached != null && cached.status == 'found' && cached.foodId != null) {
+      final food = await db.getFoodById(cached.foodId!);
+      if (food != null) {
         await db.incrementScanCount(barcode);
-        return BarcodeNotFound(barcode);
-      }
-      if (cached.foodId != null) {
-        final food = await db.getFoodById(cached.foodId!);
-        if (food != null) {
-          await db.incrementScanCount(barcode);
-          return BarcodeFound(food, isFromLocal: true);
-        }
+        return BarcodeFound(food, isFromLocal: true);
       }
     }
 
@@ -65,8 +61,8 @@ class BarcodeNutritionService {
         return BarcodeNotFound(barcode);
       }
 
-      final food = _normalizer.normalize(barcode, product);
-      if (food == null) {
+      final result = _normalizer.normalize(barcode, product);
+      if (result == null) {
         await db.upsertScanCache(ScanCacheEntry(
           barcode: barcode,
           status: 'not_found',
@@ -76,7 +72,15 @@ class BarcodeNutritionService {
         return BarcodeNotFound(barcode);
       }
 
-      final savedFood = await db.upsertFoodFromApi(food);
+      if (!result.isComplete) {
+        // Product found on OFF but missing required macros — pass the partial
+        // food as a pre-fill template. Don't save to DB or cache yet; the user
+        // must complete the form before anything is persisted.
+        return BarcodeFound(result.food,
+            isFromLocal: false, isNutritionComplete: false);
+      }
+
+      final savedFood = await db.upsertFoodFromApi(result.food);
       await db.upsertScanCache(ScanCacheEntry(
         barcode: barcode,
         foodId: savedFood.id,
@@ -85,7 +89,7 @@ class BarcodeNutritionService {
         lastScannedAt: DateTime.now().toIso8601String(),
         rawJson: jsonEncode(product),
       ));
-      return BarcodeFound(savedFood, isFromLocal: false);
+      return BarcodeFound(savedFood, isFromLocal: false, isNutritionComplete: true);
     } on SocketException {
       return const BarcodeLookupError(
           'No internet connection. Check your network and try again.');

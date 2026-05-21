@@ -154,7 +154,11 @@ sealed class BarcodeScanResult {
 class BarcodeFound extends BarcodeScanResult {
   final Food food;
   final bool isFromLocal;
-  const BarcodeFound(this.food, {required this.isFromLocal});
+  // false = one or more required macros (cal/protein/carbs/fat) were absent
+  // on OFF — show pre-filled editable form before saving.
+  final bool isNutritionComplete;
+  const BarcodeFound(this.food,
+      {required this.isFromLocal, this.isNutritionComplete = true});
 }
 
 class BarcodeNotFound extends BarcodeScanResult {

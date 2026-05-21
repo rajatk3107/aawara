@@ -1,12 +1,21 @@
 import 'package:uuid/uuid.dart';
 import '../models/nutrition_models.dart';
 
+class NormalizationResult {
+  final Food food;
+  // true only when ALL four required macros were explicitly present in OFF data
+  final bool isComplete;
+
+  const NormalizationResult({required this.food, required this.isComplete});
+}
+
 class NutritionNormalizer {
   const NutritionNormalizer();
 
-  // Converts an OFF product JSON object into a Food, or returns null if data
-  // is insufficient (missing name, zero / missing calories).
-  Food? normalize(String barcode, Map<String, dynamic> product) {
+  // Returns null only if the product has no usable name.
+  // isComplete is false when any required macro (cal/protein/carbs/fat) was
+  // absent from OFF — the UI should then ask the user to fill in the gaps.
+  NormalizationResult? normalize(String barcode, Map<String, dynamic> product) {
     final nutriments = (product['nutriments'] as Map<String, dynamic>?) ?? {};
 
     final name = ((product['product_name'] as String?) ??
@@ -21,20 +30,20 @@ class NutritionNormalizer {
         .trim()
         .nullIfEmpty();
 
-    // Energy — prefer kcal field, fall back to kJ ÷ 4.184
-    final calPer100g = _d(nutriments['energy-kcal_100g']) ??
+    // Track explicit presence separately from the value itself
+    final calRaw = _d(nutriments['energy-kcal_100g']) ??
         (_d(nutriments['energy_100g']) != null
             ? _d(nutriments['energy_100g'])! / 4.184
-            : null) ??
-        0.0;
-    if (calPer100g <= 0) return null;
+            : null);
+    final proteinRaw = _d(nutriments['proteins_100g']);
+    final carbsRaw = _d(nutriments['carbohydrates_100g']);
+    final fatRaw = _d(nutriments['fat_100g']);
 
-    final proteinPer100g = _d(nutriments['proteins_100g']) ?? 0.0;
-    final carbsPer100g = _d(nutriments['carbohydrates_100g']) ?? 0.0;
-    final fatPer100g = _d(nutriments['fat_100g']) ?? 0.0;
+    final isComplete =
+        calRaw != null && proteinRaw != null && carbsRaw != null && fatRaw != null;
+
     final fiberPer100g = _d(nutriments['fiber_100g']);
     final sugarPer100g = _d(nutriments['sugars_100g']);
-    // OFF stores sodium in g/100g; convert to mg
     final sodiumMgPer100g =
         _d(nutriments['sodium_100g']) != null ? _d(nutriments['sodium_100g'])! * 1000 : null;
 
@@ -51,13 +60,13 @@ class NutritionNormalizer {
       }
     }
 
-    return Food(
+    final food = Food(
       id: const Uuid().v4(),
       name: name,
-      calories: calPer100g,
-      proteinG: proteinPer100g,
-      carbsG: carbsPer100g,
-      fatG: fatPer100g,
+      calories: calRaw ?? 0.0,
+      proteinG: proteinRaw ?? 0.0,
+      carbsG: carbsRaw ?? 0.0,
+      fatG: fatRaw ?? 0.0,
       fiberG: fiberPer100g,
       servingSize: servingSize,
       servingUnit: servingUnit,
@@ -69,6 +78,8 @@ class NutritionNormalizer {
       source: 'off',
       lastUpdated: DateTime.now().toIso8601String(),
     );
+
+    return NormalizationResult(food: food, isComplete: isComplete);
   }
 
   double? _d(dynamic v) {

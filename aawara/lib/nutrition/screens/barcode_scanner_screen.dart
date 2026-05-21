@@ -50,8 +50,12 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     setState(() => _loading = false);
 
     switch (result) {
-      case BarcodeFound(:final food, :final isFromLocal):
-        _showFoundSheet(food, isFromLocal: isFromLocal);
+      case BarcodeFound(:final food, :final isFromLocal, :final isNutritionComplete):
+        if (isNutritionComplete) {
+          _showFoundSheet(food, isFromLocal: isFromLocal);
+        } else {
+          _showIncompleteSheet(food);
+        }
       case BarcodeNotFound(:final barcode):
         _showNotFoundSheet(barcode);
       case BarcodeLookupError(:final message):
@@ -90,6 +94,30 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       if (mounted && _scanning == false && _loading == false && _error == null) {
         _resetScanner();
       }
+    });
+  }
+
+  void _showIncompleteSheet(Food partialFood) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      isDismissible: false,
+      builder: (_) => _IncompleteSheet(
+        partialFood: partialFood,
+        date: widget.date,
+        meal: widget.meal,
+        onAdded: () => Navigator.pop(context, true),
+        onRescan: () {
+          Navigator.pop(context);
+          _resetScanner();
+        },
+      ),
+    ).then((_) {
+      if (mounted && !_scanning && !_loading && _error == null) _resetScanner();
     });
   }
 
@@ -565,6 +593,76 @@ class _FoundSheetState extends State<_FoundSheet> {
         child: Text('·',
             style: TextStyle(color: Color(0xFF333355), fontSize: 11)),
       );
+}
+
+// ── Incomplete-nutrition sheet ────────────────────────────────────────────────
+// Shown when OFF found the product but one or more required macros are missing.
+
+class _IncompleteSheet extends StatelessWidget {
+  final Food partialFood;
+  final String date;
+  final String meal;
+  final VoidCallback onAdded;
+  final VoidCallback onRescan;
+
+  const _IncompleteSheet({
+    required this.partialFood,
+    required this.date,
+    required this.meal,
+    required this.onAdded,
+    required this.onRescan,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final kb = MediaQuery.of(context).viewInsets.bottom;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, kb + 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              const Icon(Icons.edit_note_rounded,
+                  color: Color(0xFFFFD700), size: 18),
+              const SizedBox(width: 6),
+              const Text('Complete nutrition info',
+                  style: TextStyle(
+                      color: Color(0xFFFFD700),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${partialFood.name} was found on Open Food Facts but some '
+            'nutrition values are missing. Fill them in to log this product.',
+            style: const TextStyle(color: Color(0xFF888899), fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          ManualNutritionForm(
+            barcode: partialFood.barcode ?? '',
+            date: date,
+            meal: meal,
+            prefill: partialFood,
+            onAdded: onAdded,
+            onRescan: onRescan,
+          ),
+          const SizedBox(height: 8),
+          const Row(
+            children: [
+              Icon(Icons.info_outline_rounded,
+                  color: Color(0xFF444466), size: 12),
+              SizedBox(width: 4),
+              Text('via Open Food Facts',
+                  style: TextStyle(color: Color(0xFF444466), fontSize: 11)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Not-found sheet ───────────────────────────────────────────────────────────

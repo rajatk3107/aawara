@@ -4,14 +4,16 @@ import 'package:uuid/uuid.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
 
-/// Inline form shown when a barcode isn't found on Open Food Facts.
-/// Lets the user manually enter nutrition data and log it immediately.
+/// Inline form for entering / completing nutrition data before logging.
+/// Pass [prefill] with a partial Food from OFF to pre-populate known fields.
 class ManualNutritionForm extends StatefulWidget {
   final String barcode;
   final String date;
   final String meal;
   final VoidCallback onAdded;
   final VoidCallback onRescan;
+  /// Optional partial Food from Open Food Facts — pre-fills whatever is known.
+  final Food? prefill;
 
   const ManualNutritionForm({
     super.key,
@@ -20,6 +22,7 @@ class ManualNutritionForm extends StatefulWidget {
     required this.meal,
     required this.onAdded,
     required this.onRescan,
+    this.prefill,
   });
 
   @override
@@ -40,6 +43,25 @@ class _ManualNutritionFormState extends State<ManualNutritionForm> {
   double get _prot => double.tryParse(_protCtrl.text) ?? 0;
   double get _carbs => double.tryParse(_carbsCtrl.text) ?? 0;
   double get _fat => double.tryParse(_fatCtrl.text) ?? 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final f = widget.prefill;
+    if (f != null) {
+      _nameCtrl.text = f.name;
+      if (f.brand != null && f.brand!.isNotEmpty) _brandCtrl.text = f.brand!;
+      // Only pre-fill a macro if it was explicitly provided (> 0 means OFF had
+      // a real value; 0.0 means it was absent — leave field blank so user fills it).
+      if (f.calories > 0) _calCtrl.text = _fmt(f.calories);
+      if (f.proteinG > 0) _protCtrl.text = _fmt(f.proteinG);
+      if (f.carbsG > 0) _carbsCtrl.text = _fmt(f.carbsG);
+      if (f.fatG > 0) _fatCtrl.text = _fmt(f.fatG);
+    }
+  }
+
+  String _fmt(double v) =>
+      v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
   @override
   void dispose() {
