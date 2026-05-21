@@ -15,6 +15,7 @@ import 'achievements_screen.dart';
 import 'monthly_summary_screen.dart';
 import '../../notes/notes_list_screen.dart';
 import '../../settings_screen.dart';
+import '../../nutrition/models/nutrition_models.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -48,6 +49,12 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   int _wellnessEnergy = 3;
   int _wellnessSoreness = 2;
   bool _loggingWellness = false;
+
+  // Nutrition summary
+  double _todayProteinG = 0;
+  double _todayCalories = 0;
+  double _proteinGoalG = 150;
+  double _calorieGoalKcal = 2000;
 
   bool _loading = true;
 
@@ -100,6 +107,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         _db.getWorkoutPlan(),
         _db.getCompletedWorkoutDatesInRange(weekFrom, weekTo),
         _db.getWellnessForDate(todayStr),
+        _db.getTodayTotals(todayStr),
+        _db.getNutritionGoals(),
       ]);
 
       final planDay = results[0] as WorkoutPlanDay?;
@@ -111,6 +120,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final allPlanDays = results[6] as List<WorkoutPlanDay>;
       final completedDates = results[7] as Set<String>;
       final todayWellness = results[8] as Map<String, dynamic>?;
+      final nutrition = results[9] as NutritionTotals;
+      final nutGoals = (results[10] as NutritionGoals?) ?? NutritionGoals.defaults;
 
       final weekMap = <int, WorkoutPlanDay?>{};
       for (int i = 1; i <= 7; i++) {
@@ -143,6 +154,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _weekCompletedDates = completedDates;
           _userGoal = userGoal;
           _showWellnessCard = todayWellness == null;
+          _todayProteinG = nutrition.proteinG;
+          _todayCalories = nutrition.calories;
+          _proteinGoalG = nutGoals.proteinG;
+          _calorieGoalKcal = nutGoals.calories;
           _loading = false;
         });
 
@@ -488,6 +503,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                             child: _buildStatsStrip())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: _buildNutritionPill())),
                     if (_showWellnessCard)
                       SliverToBoxAdapter(
                           child: Padding(
@@ -1167,6 +1186,90 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildNutritionPill() {
+    final protPct = (_proteinGoalG > 0
+            ? (_todayProteinG / _proteinGoalG).clamp(0.0, 1.0)
+            : 0.0);
+    final calPct = (_calorieGoalKcal > 0
+            ? (_todayCalories / _calorieGoalKcal).clamp(0.0, 1.0)
+            : 0.0);
+    final protOver = _todayProteinG >= _proteinGoalG;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.restaurant_rounded,
+              color: Color(0xFF3498DB), size: 16),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Protein  ${_todayProteinG.round()}g / ${_proteinGoalG.round()}g',
+                      style: const TextStyle(
+                          color: Color(0xFFCCCCDD),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    Text(
+                      '${_todayCalories.round()} kcal',
+                      style: const TextStyle(
+                          color: Color(0xFF555577), fontSize: 11),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: protPct,
+                          minHeight: 4,
+                          backgroundColor: const Color(0xFF0D0D1A),
+                          valueColor: AlwaysStoppedAnimation(
+                            protOver
+                                ? const Color(0xFF2ECC71)
+                                : const Color(0xFF3498DB),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: LinearProgressIndicator(
+                          value: calPct,
+                          minHeight: 4,
+                          backgroundColor: const Color(0xFF0D0D1A),
+                          valueColor: const AlwaysStoppedAnimation(
+                              Color(0xFFFFD700)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

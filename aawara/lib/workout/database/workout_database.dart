@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
+import '../../nutrition/models/nutrition_models.dart';
 
 class WorkoutDatabase {
   static final WorkoutDatabase instance = WorkoutDatabase._init();
@@ -23,7 +24,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 7,
+      version: 8,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -36,6 +37,50 @@ class WorkoutDatabase {
     if (oldVersion < 5) await _migrateV5(db);
     if (oldVersion < 6) await _migrateV6(db);
     if (oldVersion < 7) await _migrateV7(db);
+    if (oldVersion < 8) await _migrateV8(db);
+  }
+
+  Future<void> _migrateV8(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS foods (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        calories REAL NOT NULL,
+        protein_g REAL NOT NULL,
+        carbs_g REAL NOT NULL,
+        fat_g REAL NOT NULL,
+        fiber_g REAL,
+        serving_size REAL NOT NULL DEFAULT 100,
+        serving_unit TEXT NOT NULL DEFAULT 'g',
+        is_custom INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS nutrition_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS nutrition_entries (
+        id TEXT PRIMARY KEY,
+        log_id TEXT NOT NULL,
+        food_id TEXT NOT NULL,
+        meal_type TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS nutrition_goals (
+        id INTEGER PRIMARY KEY,
+        calories REAL NOT NULL,
+        protein_g REAL NOT NULL,
+        carbs_g REAL NOT NULL,
+        fat_g REAL NOT NULL
+      )
+    ''');
+    await _seedFoodsIfEmpty(db);
   }
 
   Future<void> _migrateV7(Database db) async {
@@ -255,8 +300,52 @@ class WorkoutDatabase {
       )
     ''');
 
+    await db.execute('''
+      CREATE TABLE foods (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        calories REAL NOT NULL,
+        protein_g REAL NOT NULL,
+        carbs_g REAL NOT NULL,
+        fat_g REAL NOT NULL,
+        fiber_g REAL,
+        serving_size REAL NOT NULL DEFAULT 100,
+        serving_unit TEXT NOT NULL DEFAULT 'g',
+        is_custom INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE nutrition_logs (
+        id TEXT PRIMARY KEY,
+        date TEXT NOT NULL UNIQUE
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE nutrition_entries (
+        id TEXT PRIMARY KEY,
+        log_id TEXT NOT NULL,
+        food_id TEXT NOT NULL,
+        meal_type TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE nutrition_goals (
+        id INTEGER PRIMARY KEY,
+        calories REAL NOT NULL,
+        protein_g REAL NOT NULL,
+        carbs_g REAL NOT NULL,
+        fat_g REAL NOT NULL
+      )
+    ''');
+
     await _seedDefaultExercises(db);
     await _seedPplWeeklyPlan(db);
+    await _seedFoodsIfEmpty(db);
   }
 
   static const _kPplSchedule = [
@@ -370,6 +459,115 @@ class WorkoutDatabase {
       case 'general_fitness':
         await _seedSchedule(db, _kGeneralFitnessSchedule);
     }
+  }
+
+  // (name, cal, protein, carbs, fat, fiber, servingSize, servingUnit)
+  static const _kFoodSeed = <(String, double, double, double, double, double, double, String)>[
+    // ── Indian Staples ─────────────────────────────────────────────────────────
+    ('Basmati Rice (cooked)', 130, 2.7, 28, 0.3, 0.4, 100, 'g'),
+    ('Whole Wheat Roti', 264, 9.6, 51, 3.7, 11, 40, 'g'),
+    ('Toor Dal (cooked)', 116, 7.2, 20, 0.4, 6.7, 100, 'g'),
+    ('Masoor Dal (cooked)', 116, 9, 20, 0.4, 8, 100, 'g'),
+    ('Chana Dal (cooked)', 164, 8.9, 29, 2.7, 7.6, 100, 'g'),
+    ('Rajma (cooked)', 127, 8.7, 22.8, 0.5, 7.4, 100, 'g'),
+    ('Chole (cooked)', 164, 8.9, 27, 2.6, 7.6, 100, 'g'),
+    ('Moong Dal (cooked)', 105, 7, 18, 0.4, 7.6, 100, 'g'),
+    ('Paneer', 265, 18.3, 3.4, 20.8, 0, 100, 'g'),
+    ('Chicken Curry (home)', 155, 19.5, 3, 7, 0.5, 100, 'g'),
+    ('Mutton Curry', 200, 21, 3, 12, 0.3, 100, 'g'),
+    ('Fish Curry', 130, 17, 2.5, 6, 0.2, 100, 'g'),
+    ('Egg (whole)', 143, 12.6, 0.7, 9.5, 0, 50, 'g'),
+    ('Idli', 39, 2, 7.9, 0.4, 0.5, 40, 'g'),
+    ('Plain Dosa', 165, 3.9, 29, 4.1, 1.4, 85, 'g'),
+    ('Sambar', 50, 2.5, 8.7, 0.7, 2.1, 100, 'g'),
+    ('Upma', 145, 3, 26, 3.2, 1.5, 100, 'g'),
+    ('Poha', 130, 3.2, 27, 1.2, 1.2, 100, 'g'),
+    ('Plain Paratha', 287, 6.3, 40, 10, 3.2, 70, 'g'),
+    ('Milk (full fat)', 61, 3.2, 4.8, 3.3, 0, 250, 'ml'),
+    ('Curd / Yogurt', 98, 11, 3.4, 4.5, 0, 100, 'g'),
+    ('Tur Dal Fry', 140, 7.5, 22, 3, 5, 100, 'g'),
+    ('Dal Makhani', 150, 8, 21, 4.5, 5.6, 100, 'g'),
+    ('Palak Paneer', 132, 7.8, 7.5, 8, 2.6, 100, 'g'),
+    ('Aloo Sabzi', 100, 2, 15, 4, 1.5, 100, 'g'),
+    ('Mix Veg Sabzi', 80, 3, 11, 2.5, 3, 100, 'g'),
+    ('Biryani (Chicken)', 200, 10, 25, 7, 1.5, 100, 'g'),
+    ('Raita', 64, 3.8, 5.6, 2.8, 0.4, 100, 'g'),
+    ('Lassi (sweet)', 90, 3.6, 15, 1.8, 0, 200, 'ml'),
+    ('Chaas / Buttermilk', 40, 3, 5, 0.5, 0, 200, 'ml'),
+    ('Sprouts Salad', 65, 5.5, 11, 0.4, 3.2, 100, 'g'),
+    ('Bhuna Chana', 360, 24, 55, 6, 16, 30, 'g'),
+    ('Moong Dal Sprouts', 30, 3.3, 5.6, 0.1, 1.8, 100, 'g'),
+    ('Chikki (peanut)', 490, 14, 55, 24, 4, 50, 'g'),
+    ('Soya Chunks (dry)', 345, 52, 33, 0.5, 13, 30, 'g'),
+    ('Banana', 89, 1.1, 23, 0.3, 2.6, 120, 'g'),
+    ('Apple', 52, 0.3, 14, 0.2, 2.4, 150, 'g'),
+    ('Mango', 60, 0.8, 15, 0.4, 1.6, 100, 'g'),
+    ('Orange', 47, 0.9, 12, 0.1, 2.4, 130, 'g'),
+    ('Watermelon', 30, 0.6, 7.6, 0.2, 0.4, 200, 'g'),
+    ('Papaya', 43, 0.5, 11, 0.3, 1.7, 150, 'g'),
+    ('Grapes', 69, 0.7, 18, 0.2, 0.9, 100, 'g'),
+    ('Potato (boiled)', 87, 1.9, 20, 0.1, 1.8, 100, 'g'),
+    ('Sweet Potato', 86, 1.6, 20, 0.1, 3, 100, 'g'),
+    ('Tofu', 76, 8.1, 1.9, 4.8, 0.3, 100, 'g'),
+    ('Fruit Salad', 72, 1, 18, 0.3, 2, 100, 'g'),
+    // ── Universal ──────────────────────────────────────────────────────────────
+    ('Chicken Breast (cooked)', 165, 31, 0, 3.6, 0, 100, 'g'),
+    ('Chicken Thigh (cooked)', 209, 26, 0, 11, 0, 100, 'g'),
+    ('Egg White', 52, 10.9, 0.7, 0.2, 0, 100, 'g'),
+    ('Tuna (canned)', 116, 25.5, 0, 0.8, 0, 100, 'g'),
+    ('Salmon', 208, 20, 0, 13, 0, 100, 'g'),
+    ('Greek Yogurt (low fat)', 59, 10, 3.6, 0.4, 0, 150, 'g'),
+    ('Cottage Cheese', 98, 11, 3.4, 4.3, 0, 100, 'g'),
+    ('Whey Protein Powder', 120, 24, 3, 1.5, 0, 30, 'g'),
+    ('Oats (dry)', 389, 16.9, 66.3, 6.9, 10.6, 50, 'g'),
+    ('Brown Rice (cooked)', 112, 2.3, 23, 0.9, 1.8, 100, 'g'),
+    ('Quinoa (cooked)', 120, 4.4, 21.3, 1.9, 2.8, 100, 'g'),
+    ('Pasta (cooked)', 131, 5, 25, 1.1, 1.8, 100, 'g'),
+    ('White Bread', 265, 9, 49, 3.2, 2.7, 30, 'g'),
+    ('Whole Wheat Bread', 247, 13, 41, 4.2, 7, 30, 'g'),
+    ('Broccoli', 34, 2.8, 6.6, 0.4, 2.6, 100, 'g'),
+    ('Spinach', 23, 2.9, 3.6, 0.4, 2.2, 100, 'g'),
+    ('Tomato', 18, 0.9, 3.9, 0.2, 1.2, 100, 'g'),
+    ('Avocado', 160, 2, 8.5, 14.7, 6.7, 100, 'g'),
+    ('Almonds', 579, 21.2, 21.6, 49.9, 12.5, 30, 'g'),
+    ('Cashews', 553, 18.2, 30.2, 43.8, 3.3, 30, 'g'),
+    ('Walnuts', 654, 15.2, 13.7, 65.2, 6.7, 30, 'g'),
+    ('Peanuts', 567, 25.8, 16.1, 49.2, 8.5, 30, 'g'),
+    ('Peanut Butter', 588, 25.1, 19.6, 50.4, 6, 32, 'g'),
+    ('Lentils (cooked)', 116, 9, 20, 0.4, 7.9, 100, 'g'),
+    ('Ghee', 876, 0.3, 0.6, 99.8, 0, 10, 'g'),
+    ('Olive Oil', 884, 0, 0, 100, 0, 10, 'ml'),
+    ('Butter', 717, 0.9, 0.1, 81, 0, 10, 'g'),
+    ('Honey', 304, 0.3, 82.4, 0, 0.2, 20, 'g'),
+    ('Dark Chocolate', 546, 5, 60, 31, 7, 30, 'g'),
+    ('Protein Bar', 380, 28, 40, 12, 4, 60, 'g'),
+    ('Orange Juice', 45, 0.7, 10.4, 0.2, 0.2, 200, 'ml'),
+    ('Coconut Water', 19, 0.7, 3.7, 0.2, 1.1, 250, 'ml'),
+  ];
+
+  Future<void> _seedFoodsIfEmpty(Database db) async {
+    final count = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM foods'),
+        ) ??
+        0;
+    if (count > 0) return;
+    const uuid = Uuid();
+    final batch = db.batch();
+    for (final (name, cal, prot, carbs, fat, fiber, size, unit) in _kFoodSeed) {
+      batch.insert('foods', {
+        'id': uuid.v4(),
+        'name': name,
+        'calories': cal,
+        'protein_g': prot,
+        'carbs_g': carbs,
+        'fat_g': fat,
+        'fiber_g': fiber,
+        'serving_size': size,
+        'serving_unit': unit,
+        'is_custom': 0,
+      });
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<void> _seedDefaultExercises(Database db) async {
@@ -1687,6 +1885,167 @@ class WorkoutDatabase {
       if (count < 3) return false;
     }
     return true;
+  }
+
+  // ─── NUTRITION ───────────────────────────────────────────────────────────────
+
+  Future<String> _getOrCreateNutritionLog(String date) async {
+    final db = await database;
+    final existing = await db.query('nutrition_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (existing.isNotEmpty) return existing.first['id'] as String;
+    const uuid = Uuid();
+    final id = uuid.v4();
+    await db.insert('nutrition_logs', {'id': id, 'date': date});
+    return id;
+  }
+
+  Future<List<Food>> searchFoods(String query) async {
+    final db = await database;
+    final maps = await db.query(
+      'foods',
+      where: 'name LIKE ?',
+      whereArgs: ['%$query%'],
+      orderBy: 'is_custom DESC, name ASC',
+      limit: 50,
+    );
+    return maps.map(Food.fromMap).toList();
+  }
+
+  Future<NutritionTotals> getFoodsForDate(String date) async {
+    final logId = await _getOrCreateNutritionLog(date);
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT ne.id as entry_id, ne.log_id, ne.meal_type, ne.quantity, ne.created_at,
+             f.id as food_id, f.name, f.calories, f.protein_g, f.carbs_g,
+             f.fat_g, f.fiber_g, f.serving_size, f.serving_unit, f.is_custom
+      FROM nutrition_entries ne
+      INNER JOIN foods f ON ne.food_id = f.id
+      WHERE ne.log_id = ?
+      ORDER BY ne.created_at ASC
+    ''', [logId]);
+
+    final entries = rows.map((r) {
+      final food = Food.fromMap({
+        'id': r['food_id'],
+        'name': r['name'],
+        'calories': r['calories'],
+        'protein_g': r['protein_g'],
+        'carbs_g': r['carbs_g'],
+        'fat_g': r['fat_g'],
+        'fiber_g': r['fiber_g'],
+        'serving_size': r['serving_size'],
+        'serving_unit': r['serving_unit'],
+        'is_custom': r['is_custom'],
+      });
+      return NutritionEntry(
+        id: r['entry_id'] as String,
+        logId: r['log_id'] as String,
+        food: food,
+        mealType: r['meal_type'] as String,
+        quantity: (r['quantity'] as num).toDouble(),
+        createdAt: r['created_at'] as String,
+      );
+    }).toList();
+
+    double cal = 0, prot = 0, carbs = 0, fat = 0, fiber = 0;
+    for (final e in entries) {
+      cal += e.calories;
+      prot += e.proteinG;
+      carbs += e.carbsG;
+      fat += e.fatG;
+      fiber += e.fiberG;
+    }
+    return NutritionTotals(
+      calories: cal,
+      proteinG: prot,
+      carbsG: carbs,
+      fatG: fat,
+      fiberG: fiber,
+      entries: entries,
+    );
+  }
+
+  Future<NutritionEntry> addNutritionEntry(
+    String date,
+    String foodId,
+    String mealType,
+    double quantity,
+  ) async {
+    final logId = await _getOrCreateNutritionLog(date);
+    const uuid = Uuid();
+    final id = uuid.v4();
+    final now = DateTime.now().toIso8601String();
+    final db = await database;
+    await db.insert('nutrition_entries', {
+      'id': id,
+      'log_id': logId,
+      'food_id': foodId,
+      'meal_type': mealType,
+      'quantity': quantity,
+      'created_at': now,
+    });
+    final foodRows =
+        await db.query('foods', where: 'id = ?', whereArgs: [foodId], limit: 1);
+    final food = Food.fromMap(foodRows.first);
+    return NutritionEntry(
+      id: id,
+      logId: logId,
+      food: food,
+      mealType: mealType,
+      quantity: quantity,
+      createdAt: now,
+    );
+  }
+
+  Future<void> deleteNutritionEntry(String entryId) async {
+    final db = await database;
+    await db.delete('nutrition_entries', where: 'id = ?', whereArgs: [entryId]);
+  }
+
+  Future<NutritionTotals> getTodayTotals(String date) => getFoodsForDate(date);
+
+  Future<NutritionGoals?> getNutritionGoals() async {
+    final db = await database;
+    final rows = await db.query('nutrition_goals', limit: 1);
+    if (rows.isEmpty) return null;
+    return NutritionGoals.fromMap(rows.first);
+  }
+
+  Future<void> saveNutritionGoals(NutritionGoals goals) async {
+    final db = await database;
+    await db.insert(
+      'nutrition_goals',
+      {...goals.toMap(), 'id': 1},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Food> createCustomFood(Food food) async {
+    final db = await database;
+    await db.insert('foods', food.toMap());
+    return food;
+  }
+
+  Future<List<DailyNutritionSummary>> getNutritionHistory(
+      String fromDate, String toDate) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT nl.date,
+             SUM(ne.quantity * f.calories) as calories,
+             SUM(ne.quantity * f.protein_g) as protein_g,
+             SUM(ne.quantity * f.carbs_g) as carbs_g,
+             SUM(ne.quantity * f.fat_g) as fat_g
+      FROM nutrition_logs nl
+      INNER JOIN nutrition_entries ne ON ne.log_id = nl.id
+      INNER JOIN foods f ON ne.food_id = f.id
+      WHERE nl.date >= ? AND nl.date <= ?
+      GROUP BY nl.date
+      ORDER BY nl.date ASC
+    ''', [fromDate, toDate]);
+    return rows
+        .map((r) => DailyNutritionSummary.fromMap(Map<String, dynamic>.from(r)))
+        .toList();
   }
 
   Future<void> close() async {

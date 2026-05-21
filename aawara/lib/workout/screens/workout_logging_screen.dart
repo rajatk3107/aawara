@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
@@ -59,14 +60,56 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       // View mode — show stored duration, no running timer
       _elapsedSeconds = _log.durationSeconds ?? 0;
     } else {
-      // Active workout — anchor start time to wall clock
-      _workoutStartTime = DateTime.now();
-      _startDurationTimer();
       if (_log.exercises.isNotEmpty) {
         _expandedId = _log.exercises.first.id;
       }
+      _initTimer();
     }
     _loadDetails();
+  }
+
+  // Load persisted timer state so the timer survives screen pops/pushes.
+  Future<void> _initTimer() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final savedMs = prefs.getInt('wl_start_${_log.id}');
+    final savedPausedElapsed = prefs.getInt('wl_paused_elapsed_${_log.id}');
+    if (savedMs != null) {
+      _workoutStartTime = DateTime.fromMillisecondsSinceEpoch(savedMs);
+      if (savedPausedElapsed != null) {
+        setState(() {
+          _paused = true;
+          _elapsedAtPause = savedPausedElapsed;
+          _elapsedSeconds = savedPausedElapsed;
+        });
+      } else {
+        _startDurationTimer();
+      }
+    } else {
+      _workoutStartTime = DateTime.now();
+      prefs.setInt('wl_start_${_log.id}', _workoutStartTime!.millisecondsSinceEpoch);
+      _startDurationTimer();
+    }
+  }
+
+  // Fire-and-forget: persist current timer anchor so we can resume after a pop.
+  void _saveTimerState() {
+    if (_log.completed || _workoutStartTime == null) return;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setInt('wl_start_${_log.id}', _workoutStartTime!.millisecondsSinceEpoch);
+      if (_paused) {
+        prefs.setInt('wl_paused_elapsed_${_log.id}', _elapsedAtPause);
+      } else {
+        prefs.remove('wl_paused_elapsed_${_log.id}');
+      }
+    });
+  }
+
+  void _clearTimerState() {
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('wl_start_${_log.id}');
+      prefs.remove('wl_paused_elapsed_${_log.id}');
+    });
   }
 
   @override
@@ -74,10 +117,10 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _restTimer?.cancel();
+    _saveTimerState();
     super.dispose();
   }
 
-  // Restart timer from wall clock whenever app comes back to foreground
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_log.completed || _workoutStartTime == null) return;
@@ -85,6 +128,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       _startDurationTimer();
     } else if (state == AppLifecycleState.paused) {
       _durationTimer?.cancel();
+      _saveTimerState();
     }
   }
 
@@ -437,6 +481,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       return;
     }
     _durationTimer?.cancel();
+    _clearTimerState();
     final updated = _log.copyWith(completed: true, durationSeconds: _elapsedSeconds);
     await _db.updateWorkoutLog(updated);
     setState(() => _log = updated);
@@ -707,6 +752,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                       _durationTimer?.cancel();
                     }
                   });
+                  _saveTimerState();
                 },
               )
             else

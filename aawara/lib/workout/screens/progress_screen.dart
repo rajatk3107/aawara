@@ -5,6 +5,7 @@ import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
 import 'exercise_progress_screen.dart';
+import '../../nutrition/models/nutrition_models.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
 
@@ -38,6 +39,11 @@ class _ProgressScreenState extends State<ProgressScreen>
   DateTime? _weightCustomFrom;
   DateTime? _weightCustomTo;
 
+  // Nutrition tab
+  List<DailyNutritionSummary> _nutritionHistory = [];
+  NutritionGoals _nutGoals = NutritionGoals.defaults;
+  bool _nutritionLoading = false;
+
   // Shared overview
   int _streak = 0;
   int _weeklyCount = 0;
@@ -46,10 +52,13 @@ class _ProgressScreenState extends State<ProgressScreen>
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl = TabController(length: 3, vsync: this);
     _tabCtrl.addListener(() {
       if (_tabCtrl.index == 1 && _weightData.isEmpty && !_weightLoading) {
         _loadWeightData();
+      }
+      if (_tabCtrl.index == 2 && _nutritionHistory.isEmpty && !_nutritionLoading) {
+        _loadNutritionData();
       }
     });
     _load();
@@ -236,7 +245,8 @@ class _ProgressScreenState extends State<ProgressScreen>
           indicatorWeight: 2,
           tabs: const [
             Tab(text: 'Strength'),
-            Tab(text: 'Body Weight'),
+            Tab(text: 'Body'),
+            Tab(text: 'Nutrition'),
           ],
         ),
       ),
@@ -247,6 +257,7 @@ class _ProgressScreenState extends State<ProgressScreen>
               children: [
                 _buildStrengthTab(),
                 _buildBodyWeightTab(),
+                _buildNutritionTab(),
               ],
             ),
     );
@@ -1087,6 +1098,244 @@ class _ProgressScreenState extends State<ProgressScreen>
       return date;
     }
   }
+
+  // ─── Nutrition tab ────────────────────────────────────────────────────────
+
+  Future<void> _loadNutritionData() async {
+    setState(() => _nutritionLoading = true);
+    final now = DateTime.now();
+    final from = _fmt(now.subtract(const Duration(days: 29)));
+    final to = _fmt(now);
+    final results = await Future.wait([
+      _db.getNutritionHistory(from, to),
+      _db.getNutritionGoals(),
+    ]);
+    if (mounted) {
+      setState(() {
+        _nutritionHistory = results[0] as List<DailyNutritionSummary>;
+        _nutGoals = (results[1] as NutritionGoals?) ?? NutritionGoals.defaults;
+        _nutritionLoading = false;
+      });
+    }
+  }
+
+  Widget _buildNutritionTab() {
+    if (_nutritionLoading) {
+      return const Center(
+          child: CircularProgressIndicator(color: Color(0xFFFFD700)));
+    }
+    if (_nutritionHistory.isEmpty) {
+      return const Center(
+        child: Text('No nutrition data yet.\nStart logging meals!',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFF555577), fontSize: 15)),
+      );
+    }
+
+    final now = DateTime.now();
+    final last7 = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      return _fmt(d);
+    });
+    final byDate = {for (final s in _nutritionHistory) s.date: s};
+
+    final logged7 = last7.where((d) => byDate.containsKey(d)).length.clamp(1, 7);
+    final avg7Cal =
+        last7.fold(0.0, (s, d) => s + (byDate[d]?.calories ?? 0)) / logged7;
+    final avg7Prot =
+        last7.fold(0.0, (s, d) => s + (byDate[d]?.proteinG ?? 0)) / logged7;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          children: [
+            _nutAvgCard('Avg Calories', '${avg7Cal.round()} kcal',
+                '/ ${_nutGoals.calories.round()}', const Color(0xFFFFD700)),
+            const SizedBox(width: 10),
+            _nutAvgCard('Avg Protein', '${avg7Prot.round()}g',
+                '/ ${_nutGoals.proteinG.round()}g', const Color(0xFF3498DB)),
+          ],
+        ),
+        const SizedBox(height: 20),
+        const Text('Last 7 Days — Calories',
+            style: TextStyle(
+                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 200,
+          child: BarChart(
+            BarChartData(
+              alignment: BarChartAlignment.spaceAround,
+              maxY: (_nutGoals.calories * 1.3).ceilToDouble(),
+              barTouchData: BarTouchData(enabled: false),
+              titlesData: FlTitlesData(
+                leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (v, _) {
+                      final idx = v.toInt();
+                      if (idx < 0 || idx >= last7.length) return const SizedBox.shrink();
+                      final parts = last7[idx].split('-');
+                      return Text(
+                        '${int.parse(parts[2])}/${int.parse(parts[1])}',
+                        style: const TextStyle(color: Color(0xFF444466), fontSize: 9),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              gridData: FlGridData(
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) =>
+                    const FlLine(color: Color(0xFF1E1E35), strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+              extraLinesData: ExtraLinesData(horizontalLines: [
+                HorizontalLine(
+                  y: _nutGoals.calories,
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                  strokeWidth: 1,
+                  dashArray: [4, 4],
+                ),
+              ]),
+              barGroups: last7.asMap().entries.map((e) {
+                final idx = e.key;
+                final s = byDate[e.value];
+                final cal = s?.calories ?? 0;
+                final prot = s?.proteinG ?? 0;
+                final carbsV = s?.carbsG ?? 0;
+                final fat = s?.fatG ?? 0;
+                final total = prot * 4 + carbsV * 4 + fat * 9;
+                return BarChartGroupData(
+                  x: idx,
+                  barRods: [
+                    BarChartRodData(
+                      toY: cal,
+                      width: 22,
+                      borderRadius: BorderRadius.circular(4),
+                      rodStackItems: total > 0
+                          ? [
+                              BarChartRodStackItem(0, prot * 4, const Color(0xFF3498DB)),
+                              BarChartRodStackItem(prot * 4, prot * 4 + carbsV * 4, const Color(0xFF2ECC71)),
+                              BarChartRodStackItem(prot * 4 + carbsV * 4, prot * 4 + carbsV * 4 + fat * 9, const Color(0xFFE67E22)),
+                            ]
+                          : [BarChartRodStackItem(0, 0.1, const Color(0xFF1E1E35))],
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _nutLegend('Protein', const Color(0xFF3498DB)),
+            const SizedBox(width: 16),
+            _nutLegend('Carbs', const Color(0xFF2ECC71)),
+            const SizedBox(width: 16),
+            _nutLegend('Fat', const Color(0xFFE67E22)),
+            const SizedBox(width: 16),
+            _nutLegend('Goal', const Color(0xFFFFD700), dashed: true),
+          ],
+        ),
+        const SizedBox(height: 24),
+        const Text('30-Day Log',
+            style: TextStyle(
+                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 10),
+        ..._nutritionHistory.reversed.take(14).map(_buildNutRow),
+      ],
+    );
+  }
+
+  Widget _nutAvgCard(String label, String value, String sub, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFF1E1E35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: const TextStyle(color: Color(0xFF888899), fontSize: 12)),
+            const SizedBox(height: 4),
+            Text(value,
+                style: TextStyle(
+                    color: color, fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(sub,
+                style: const TextStyle(color: Color(0xFF444466), fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _nutLegend(String label, Color color, {bool dashed = false}) {
+    return Row(
+      children: [
+        Container(
+          width: 20,
+          height: 3,
+          decoration: BoxDecoration(
+            color: dashed ? Colors.transparent : color,
+            border: dashed ? Border.all(color: color, width: 1) : null,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(label,
+            style: const TextStyle(color: Color(0xFF888899), fontSize: 11)),
+      ],
+    );
+  }
+
+  Widget _buildNutRow(DailyNutritionSummary s) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Row(
+        children: [
+          Text(s.date,
+              style: const TextStyle(color: Color(0xFF888899), fontSize: 12)),
+          const Spacer(),
+          _nutBadge('${s.calories.round()}', 'kcal', const Color(0xFFFFD700)),
+          const SizedBox(width: 10),
+          _nutBadge('${s.proteinG.round()}g', 'P', const Color(0xFF3498DB)),
+          const SizedBox(width: 10),
+          _nutBadge('${s.carbsG.round()}g', 'C', const Color(0xFF2ECC71)),
+          const SizedBox(width: 10),
+          _nutBadge('${s.fatG.round()}g', 'F', const Color(0xFFE67E22)),
+        ],
+      ),
+    );
+  }
+
+  Widget _nutBadge(String value, String label, Color color) {
+    return Column(
+      children: [
+        Text(value,
+            style: TextStyle(
+                color: color, fontSize: 12, fontWeight: FontWeight.bold)),
+        Text(label,
+            style: const TextStyle(color: Color(0xFF444466), fontSize: 9)),
+      ],
+    );
+  }
 }
 
 // ─── PROGRESS DETAIL ROW ─────────────────────────────────────────────────────
@@ -1199,6 +1448,7 @@ class _ProgressDetailRow extends StatelessWidget {
       return date;
     }
   }
+
 }
 
 // ─── HELPER WIDGETS ──────────────────────────────────────────────────────────

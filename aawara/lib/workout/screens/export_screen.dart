@@ -9,6 +9,7 @@ import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../widgets/muscle_group_filter.dart';
+import '../../nutrition/models/nutrition_models.dart';
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -119,9 +120,14 @@ class _ExportScreenState extends State<ExportScreen> {
         }
       }
 
+      List<DailyNutritionSummary> nutritionData = [];
+      if (_format == _Format.json) {
+        nutritionData = await _db.getNutritionHistory(from, to);
+      }
+
       final content = _format == _Format.csv
           ? _buildCsv(logs, exerciseMap)
-          : _buildJson(logs, exerciseMap, from, to);
+          : _buildJson(logs, exerciseMap, nutritionData, from, to);
 
       final ext = _format == _Format.csv ? 'csv' : 'json';
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
@@ -285,17 +291,28 @@ class _ExportScreenState extends State<ExportScreen> {
   String _buildJson(
     List<WorkoutLog> logs,
     Map<String, Exercise> exMap,
+    List<DailyNutritionSummary> nutrition,
     String from,
     String to,
   ) {
     final payload = {
       'app': 'aawara',
-      'schema_version': 1,
+      'schema_version': 2,
       'exported_at': DateTime.now().toIso8601String(),
       'date_range': {'from': from, 'to': to},
       'exercise_filter': _filterExercise?.name ?? 'All',
       'total_workouts': logs.length,
       'total_sets': logs.fold(0, (s, l) => s + l.totalSets),
+      if (nutrition.isNotEmpty)
+        'nutrition_daily': nutrition
+            .map((n) => {
+                  'date': n.date,
+                  'calories': n.calories.round(),
+                  'protein_g': double.parse(n.proteinG.toStringAsFixed(1)),
+                  'carbs_g': double.parse(n.carbsG.toStringAsFixed(1)),
+                  'fat_g': double.parse(n.fatG.toStringAsFixed(1)),
+                })
+            .toList(),
       'workouts': logs
           .map((log) => {
                 'date': log.date,
