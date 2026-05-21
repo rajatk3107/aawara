@@ -6,6 +6,7 @@ import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
 import '../widgets/workout_heatmap.dart';
 import 'exercise_progress_screen.dart';
+import 'progress_photos_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
@@ -274,6 +275,8 @@ class _ProgressScreenState extends State<ProgressScreen>
         _buildOverviewCards(),
         const SizedBox(height: 16),
         _buildExerciseTrackerBanner(),
+        const SizedBox(height: 10),
+        _buildProgressPhotosBanner(),
         const SizedBox(height: 20),
         _buildSectionHeader('Activity'),
         const SizedBox(height: 8),
@@ -351,6 +354,56 @@ class _ProgressScreenState extends State<ProgressScreen>
             ),
             const Icon(Icons.chevron_right_rounded,
                 color: Color(0xFFFFD700), size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProgressPhotosBanner() {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const ProgressPhotosScreen()),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF1E1E35)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF3498DB).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.camera_alt_rounded,
+                  color: Color(0xFF3498DB), size: 22),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Progress Photos',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold)),
+                  SizedBox(height: 2),
+                  Text('Track your physique over time',
+                      style: TextStyle(
+                          color: Color(0xFF888899), fontSize: 12)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Color(0xFF3498DB), size: 22),
           ],
         ),
       ),

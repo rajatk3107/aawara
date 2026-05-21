@@ -5,6 +5,7 @@ import '../widgets/add_food_sheet.dart';
 import '../widgets/water_tracker_card.dart';
 import 'meal_presets_screen.dart';
 import 'nutrition_goals_screen.dart';
+import 'tdee_calculator_screen.dart';
 
 class NutritionScreen extends StatefulWidget {
   const NutritionScreen({super.key});
@@ -106,6 +107,16 @@ class _NutritionScreenState extends State<NutritionScreen> {
                     color: Color(0xFF888899)),
                 tooltip: 'Saved Meals',
                 onPressed: _openPresets,
+              ),
+              IconButton(
+                icon: const Icon(Icons.calculate_rounded,
+                    color: Color(0xFF888899)),
+                tooltip: 'TDEE Calculator',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const TdeeCalculatorScreen()),
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.track_changes_rounded,

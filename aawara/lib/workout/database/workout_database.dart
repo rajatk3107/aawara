@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/exercise.dart';
+import '../models/progress_photo.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
 import '../../nutrition/models/nutrition_models.dart';
@@ -24,7 +26,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 10,
+      version: 11,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -40,6 +42,19 @@ class WorkoutDatabase {
     if (oldVersion < 8) await _migrateV8(db);
     if (oldVersion < 9) await _migrateV9(db);
     if (oldVersion < 10) await _migrateV10(db);
+    if (oldVersion < 11) await _migrateV11(db);
+  }
+
+  Future<void> _migrateV11(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS progress_photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
   }
 
   Future<void> _migrateV8(Database db) async {
@@ -396,6 +411,16 @@ class WorkoutDatabase {
         date TEXT PRIMARY KEY,
         glasses_drunk INTEGER NOT NULL DEFAULT 0,
         target_glasses INTEGER NOT NULL DEFAULT 8
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE progress_photos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        note TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
       )
     ''');
 
@@ -1422,6 +1447,34 @@ class WorkoutDatabase {
         orderBy: 'date DESC', limit: 1, columns: ['weight_kg']);
     if (rows.isEmpty) return null;
     return (rows.first['weight_kg'] as num).toDouble();
+  }
+
+  // ─── PROGRESS PHOTOS ────────────────────────────────────────────────────────
+
+  Future<List<ProgressPhoto>> getProgressPhotos() async {
+    final db = await database;
+    final rows = await db.query('progress_photos',
+        orderBy: 'date DESC, id DESC');
+    return rows.map(ProgressPhoto.fromMap).toList();
+  }
+
+  Future<int> addProgressPhoto(ProgressPhoto photo) async {
+    final db = await database;
+    return await db.insert('progress_photos', photo.toMap());
+  }
+
+  Future<void> deleteProgressPhoto(int id) async {
+    final db = await database;
+    final rows = await db.query('progress_photos',
+        where: 'id = ?', whereArgs: [id], columns: ['file_path']);
+    if (rows.isNotEmpty) {
+      final path = rows.first['file_path'] as String;
+      try {
+        final f = File(path);
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+    await db.delete('progress_photos', where: 'id = ?', whereArgs: [id]);
   }
 
   // ─── QUICK START TEMPLATES ──────────────────────────────────────────────────
