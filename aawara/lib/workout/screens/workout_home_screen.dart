@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
-import '../models/workout_plan_day.dart';
 import '../models/workout_log.dart';
 import 'workout_logging_screen.dart';
-import 'workout_plan_screen.dart';
 import 'exercise_library_screen.dart';
 import 'progress_screen.dart';
 import 'workout_history_screen.dart';
@@ -28,16 +27,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   final _db = WorkoutDatabase.instance;
 
   DateTime _selectedDate = DateTime.now();
-  WorkoutPlanDay? _dayPlan;
   List<WorkoutLog> _dayLogs = [];
-  List<Exercise> _dayExercises = [];
 
-  // The in-progress session (if any), else the last session.
-  WorkoutLog? get _dayLog {
-    if (_dayLogs.isEmpty) return null;
-    try { return _dayLogs.firstWhere((l) => !l.completed); }
-    catch (_) { return _dayLogs.last; }
-  }
   WorkoutLog? get _activeLog {
     try { return _dayLogs.firstWhere((l) => !l.completed); }
     catch (_) { return null; }
@@ -51,7 +42,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   String? _userGoal;
 
   // Week strip
-  Map<int, WorkoutPlanDay?> _weekPlanDays = {};
   Set<String> _weekCompletedDates = {};
 
   // Wellness check-in
@@ -72,13 +62,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   String get _dateStr {
     final d = _selectedDate;
     return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-  }
-
-  bool get _isToday {
-    final now = DateTime.now();
-    return _selectedDate.year == now.year &&
-        _selectedDate.month == now.month &&
-        _selectedDate.day == now.day;
   }
 
   bool get _isFuture {
@@ -109,59 +92,34 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final todayStr = _fmt(now);
 
       final results = await Future.wait([
-        _db.getPlanDayForWeekday(_selectedDate.weekday),
         _db.getWorkoutLogsForDate(_dateStr),
         _db.getWorkoutStreak(),
         _db.getWeeklyWorkoutCount(),
         _db.getMonthlyWorkoutCount(),
         _db.getLatestBodyWeight(),
-        _db.getWorkoutPlan(),
         _db.getCompletedWorkoutDatesInRange(weekFrom, weekTo),
         _db.getWellnessForDate(todayStr),
         _db.getTodayTotals(todayStr),
         _db.getNutritionGoals(),
       ]);
 
-      final planDay = results[0] as WorkoutPlanDay?;
-      final logs = results[1] as List<WorkoutLog>;
-      final streak = results[2] as int;
-      final weekly = results[3] as int;
-      final monthly = results[4] as int;
-      final weight = results[5] as double?;
-      final allPlanDays = results[6] as List<WorkoutPlanDay>;
-      final completedDates = results[7] as Set<String>;
-      final todayWellness = results[8] as Map<String, dynamic>?;
-      final nutrition = results[9] as NutritionTotals;
-      final nutGoals = (results[10] as NutritionGoals?) ?? NutritionGoals.defaults;
-
-      final weekMap = <int, WorkoutPlanDay?>{};
-      for (int i = 1; i <= 7; i++) {
-        weekMap[i] = null;
-      }
-      for (final d in allPlanDays) {
-        weekMap[d.dayOfWeek] = d;
-      }
-
-      List<Exercise> exercises = [];
-      if (planDay != null && !planDay.isRestDay) {
-        final override = await _db.getDayOverride(_dateStr);
-        final ids = override ?? planDay.exerciseIds;
-        for (final id in ids) {
-          final ex = await _db.getExerciseById(id);
-          if (ex != null) exercises.add(ex);
-        }
-      }
+      final logs = results[0] as List<WorkoutLog>;
+      final streak = results[1] as int;
+      final weekly = results[2] as int;
+      final monthly = results[3] as int;
+      final weight = results[4] as double?;
+      final completedDates = results[5] as Set<String>;
+      final todayWellness = results[6] as Map<String, dynamic>?;
+      final nutrition = results[7] as NutritionTotals;
+      final nutGoals = (results[8] as NutritionGoals?) ?? NutritionGoals.defaults;
 
       if (mounted) {
         setState(() {
-          _dayPlan = planDay;
           _dayLogs = logs;
-          _dayExercises = exercises;
           _streak = streak;
           _weeklyCount = weekly;
           _monthlyCount = monthly;
           _latestWeight = weight;
-          _weekPlanDays = weekMap;
           _weekCompletedDates = completedDates;
           _userGoal = userGoal;
           _showWellnessCard = todayWellness == null;
@@ -210,78 +168,59 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
 
   Future<void> _loadForDate() async {
     try {
-      final planDay = await _db.getPlanDayForWeekday(_selectedDate.weekday);
       final logs = await _db.getWorkoutLogsForDate(_dateStr);
-
-      List<Exercise> exercises = [];
-      if (planDay != null && !planDay.isRestDay) {
-        final override = await _db.getDayOverride(_dateStr);
-        final ids = override ?? planDay.exerciseIds;
-        for (final id in ids) {
-          final ex = await _db.getExerciseById(id);
-          if (ex != null) exercises.add(ex);
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _dayPlan = planDay;
-          _dayLogs = logs;
-          _dayExercises = exercises;
-        });
-      }
+      if (mounted) setState(() => _dayLogs = logs);
     } catch (_) {}
   }
 
-  Future<void> _logWorkout() async {
-    if (_dayExercises.isNotEmpty) {
+  Future<void> _startWorkoutFlow() async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _StartWorkoutSheet(
+        onQuickStart: () async {
+          Navigator.pop(context);
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => QuickStartScreen(targetDate: _dateStr)),
+          );
+          _load();
+        },
+        onCustom: () async {
+          Navigator.pop(context);
+          await _startCustomWorkout();
+        },
+      ),
+    );
+  }
+
+  Future<void> _startCustomWorkout() async {
+    const uuid = Uuid();
+    final log = WorkoutLog(
+      id: uuid.v4(),
+      date: _dateStr,
+      workoutName: 'Custom Workout',
+    );
+    final created = await _db.createWorkoutLog(log);
+    final fullLog = await _db.getWorkoutLogById(created.id);
+    if (fullLog != null && mounted) {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => QuickStartScreen(
-            targetDate: _dateStr,
-            preloadedName: _dayPlan?.workoutName ?? 'Workout',
-            preloadedExercises: _dayExercises,
-          ),
-        ),
+            builder: (_) => WorkoutLoggingScreen(workoutLog: fullLog)),
       );
-    } else {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => QuickStartScreen(targetDate: _dateStr)),
-      );
+      _load();
     }
-    _load();
   }
 
   Future<void> _openLog([WorkoutLog? specificLog]) async {
-    final log = specificLog ?? _dayLog;
+    final log = specificLog ?? (_dayLogs.isEmpty ? null : _dayLogs.last);
     if (log == null) return;
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => WorkoutLoggingScreen(workoutLog: log)),
     );
-    _load();
-  }
-
-  Future<void> _addSession() async {
-    if (_dayExercises.isNotEmpty) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => QuickStartScreen(
-            targetDate: _dateStr,
-            preloadedName: _dayPlan?.workoutName ?? 'Workout',
-            preloadedExercises: _dayExercises,
-          ),
-        ),
-      );
-    } else {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => QuickStartScreen(targetDate: _dateStr)),
-      );
-    }
     _load();
   }
 
@@ -350,17 +289,8 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     }
   }
 
-  Future<void> _toggleRestDay() async {
-    if (_dayPlan == null) return;
-    final updated = _dayPlan!.copyWith(isRestDay: !_dayPlan!.isRestDay);
-    await _db.savePlanDay(updated);
-    _load();
-  }
-
   void _showDayOptions() {
     final hasLog = _dayLogs.isNotEmpty;
-    final isRest = _dayPlan?.isRestDay ?? false;
-
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -406,7 +336,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
               _OptionTile(
                 icon: Icons.delete_sweep_outlined,
                 label: 'Clear Workout Log',
-                subtitle: 'Remove all logged sets for this day',
+                subtitle: 'Remove all logged sessions for this day',
                 color: const Color(0xFFE74C3C),
                 onTap: () async {
                   Navigator.pop(context);
@@ -423,49 +353,15 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                     _load();
                   }
                 },
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 8),
+                child: Text(
+                  'No workout logged on this day.',
+                  style: const TextStyle(color: Color(0xFF555577), fontSize: 14),
+                ),
               ),
-            if (_dayPlan != null)
-              _OptionTile(
-                icon: isRest
-                    ? Icons.fitness_center_rounded
-                    : Icons.self_improvement_rounded,
-                label: isRest ? 'Change to Workout Day' : 'Mark as Rest Day',
-                subtitle: isRest
-                    ? 'Switch this day back to a workout day'
-                    : 'Mark this day as rest — clears plan and log',
-                color: isRest
-                    ? const Color(0xFFFFD700)
-                    : const Color(0xFF3498DB),
-                onTap: () async {
-                  Navigator.pop(context);
-                  if (!isRest && hasLog) {
-                    final confirm = await _confirmDialog(
-                      'Mark as Rest Day?',
-                      'This will also delete the workout log for this day.',
-                      confirmLabel: 'Mark Rest',
-                      confirmColor: const Color(0xFF3498DB),
-                    );
-                    if (confirm != true) return;
-                    for (final l in _dayLogs) {
-                      await _db.deleteWorkoutLog(l.id);
-                    }
-                  }
-                  _toggleRestDay();
-                },
-              ),
-            _OptionTile(
-              icon: Icons.edit_calendar_outlined,
-              label: 'Edit Weekly Plan',
-              subtitle: 'Change exercises or settings for this weekday',
-              color: const Color(0xFF9B59B6),
-              onTap: () async {
-                Navigator.pop(context);
-                await Navigator.push(context,
-                    MaterialPageRoute(
-                        builder: (_) => const WorkoutPlanScreen()));
-                _load();
-              },
-            ),
           ],
         ),
       ),
@@ -728,41 +624,22 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           const SizedBox(height: 10),
           Row(
             children: List.generate(7, (i) {
-              final weekday = i + 1;
               final dayDate = weekMonday.add(Duration(days: i));
               final dateStr = _fmt(dayDate);
-              final planDay = _weekPlanDays[weekday];
-              final isRest = planDay?.isRestDay ?? false;
               final isDone = _weekCompletedDates.contains(dateStr);
-              final isToday = weekday == now.weekday;
-              final isSelected = weekday == _selectedDate.weekday &&
-                  _selectedDate.year == dayDate.year &&
+              final isToday = (i + 1) == now.weekday;
+              final isSelected = _selectedDate.year == dayDate.year &&
                   _selectedDate.month == dayDate.month &&
                   _selectedDate.day == dayDate.day;
               final isFuture = dayDate.isAfter(DateTime(now.year, now.month, now.day));
 
-              // Short label from workout name
-              String label;
-              if (planDay == null) {
-                label = '—';
-              } else if (isRest) {
-                label = 'Rest';
-              } else {
-                final words = planDay.workoutName.split(' ');
-                label = words.isNotEmpty ? words[0] : '—';
-                if (label.length > 4) label = label.substring(0, 4);
-              }
-
-              Color dotColor;
-              if (isDone) {
-                dotColor = const Color(0xFF2ECC71);
-              } else if (isToday) {
-                dotColor = const Color(0xFFFFD700);
-              } else if (isFuture) {
-                dotColor = const Color(0xFF2A2A45);
-              } else {
-                dotColor = const Color(0xFF3A3A55);
-              }
+              final dotColor = isDone
+                  ? const Color(0xFF2ECC71)
+                  : isToday
+                      ? const Color(0xFFFFD700)
+                      : isFuture
+                          ? const Color(0xFF2A2A45)
+                          : const Color(0xFF3A3A55);
 
               return Expanded(
                 child: GestureDetector(
@@ -773,7 +650,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 180),
                     margin: EdgeInsets.only(right: i < 6 ? 4 : 0),
-                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                     decoration: BoxDecoration(
                       color: isSelected
                           ? const Color(0xFFFFD700).withValues(alpha: 0.08)
@@ -798,23 +675,20 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                             letterSpacing: 0.4,
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Text(
-                          label,
+                          '${dayDate.day}',
                           style: TextStyle(
-                            fontSize: 8,
+                            fontSize: 12,
                             fontWeight: FontWeight.w600,
                             color: isDone
                                 ? const Color(0xFF2ECC71)
                                 : isSelected || isToday
-                                    ? const Color(0xFFFFD700)
-                                    : isRest
-                                        ? const Color(0xFF3A3A55)
-                                        : isFuture
-                                            ? const Color(0xFF444466)
-                                            : const Color(0xFF666688),
+                                    ? Colors.white
+                                    : isFuture
+                                        ? const Color(0xFF333355)
+                                        : const Color(0xFF666688),
                           ),
-                          overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 5),
                         Container(
@@ -840,8 +714,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   // ─── Workout Card ─────────────────────────────────────────────────────────────
 
   Widget _buildWorkoutCard() {
-    final isRest = _dayPlan?.isRestDay ?? false;
-    final noPlan = _dayPlan == null;
     final activeLog = _activeLog;
     final isInProgress = activeLog != null;
     final hasAnySessions = _dayLogs.isNotEmpty;
@@ -849,66 +721,57 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     final sessionCount = _dayLogs.length;
     final lastLog = _dayLogs.isEmpty ? null : _dayLogs.last;
 
-    Color accentColor;
-    String badge;
-    String title;
-
-    if (allCompleted) {
-      accentColor = const Color(0xFF2ECC71);
-      badge = sessionCount > 1 ? 'DONE · $sessionCount SESSIONS' : 'DONE';
-      title = lastLog!.workoutName;
-    } else if (isInProgress) {
-      accentColor = const Color(0xFFF39C12);
-      badge = sessionCount > 1
-          ? 'SESSION $sessionCount · IN PROGRESS'
-          : 'IN PROGRESS';
-      title = activeLog.workoutName;
-    } else if (isRest) {
-      accentColor = const Color(0xFF3498DB);
-      badge = 'REST DAY';
-      title = 'Recover & Recharge';
-    } else if (noPlan) {
-      accentColor = const Color(0xFF888899);
-      badge = _isFuture ? 'UPCOMING' : 'NO PLAN';
-      title = 'No Workout Planned';
-    } else {
-      accentColor = const Color(0xFFFFD700);
-      final dayLabel = _isToday
-          ? 'TODAY'
-          : DateFormat('EEE').format(_selectedDate).toUpperCase();
-      badge =
-          '$dayLabel · ${(_dayPlan!.workoutName.split(' ').take(2).join(' ')).toUpperCase()}';
-      title = _dayPlan!.workoutName;
-    }
-
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF12121F),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: accentColor.withValues(alpha: 0.2), width: 1.5),
+        border: Border.all(
+          color: isInProgress
+              ? const Color(0xFFF39C12).withValues(alpha: 0.3)
+              : allCompleted
+                  ? const Color(0xFF2ECC71).withValues(alpha: 0.2)
+                  : const Color(0xFF1E1E35),
+          width: 1.5,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Badge chip
+                      // State badge
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: accentColor,
+                          color: isInProgress
+                              ? const Color(0xFFF39C12)
+                              : allCompleted
+                                  ? const Color(0xFF2ECC71)
+                                  : const Color(0xFFFFD700),
                           borderRadius: BorderRadius.circular(5),
                         ),
                         child: Text(
-                          badge,
+                          isInProgress
+                              ? sessionCount > 1
+                                  ? 'SESSION $sessionCount · IN PROGRESS'
+                                  : 'IN PROGRESS'
+                              : allCompleted
+                                  ? sessionCount > 1
+                                      ? 'DONE · $sessionCount SESSIONS'
+                                      : 'DONE'
+                                  : _isFuture
+                                      ? DateFormat('EEE, MMM d')
+                                          .format(_selectedDate)
+                                          .toUpperCase()
+                                      : 'TODAY',
                           style: const TextStyle(
                               color: Colors.black,
                               fontSize: 10,
@@ -918,66 +781,38 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        title,
+                        isInProgress
+                            ? activeLog.workoutName
+                            : allCompleted
+                                ? lastLog!.workoutName
+                                : 'Ready to train?',
                         style: const TextStyle(
                             color: Colors.white,
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
                             letterSpacing: -0.3),
                       ),
-                      if (!isRest && !noPlan && !allCompleted && !isInProgress)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 5),
-                          child: Row(
-                            children: [
-                              Text('${_dayExercises.length} exercises',
-                                  style: const TextStyle(
-                                      color: Color(0xFF888899), fontSize: 12)),
-                              const Text('  ·  ',
-                                  style: TextStyle(
-                                      color: Color(0xFF444466), fontSize: 12)),
-                              Text(
-                                  '~${(_dayExercises.length * 7).clamp(20, 120)} min',
-                                  style: const TextStyle(
-                                      color: Color(0xFF888899), fontSize: 12)),
-                            ],
-                          ),
-                        ),
+                      const SizedBox(height: 4),
                       if (allCompleted && sessionCount == 1)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 5),
-                          child: Row(
-                            children: [
-                              Text('${lastLog!.exercises.length} exercises',
-                                  style: const TextStyle(
-                                      color: Color(0xFF888899), fontSize: 12)),
-                              const Text('  ·  ',
-                                  style: TextStyle(
-                                      color: Color(0xFF444466), fontSize: 12)),
-                              Text('${lastLog.totalSets} sets',
-                                  style: const TextStyle(
-                                      color: Color(0xFF888899), fontSize: 12)),
-                              const Text('  ·  ',
-                                  style: TextStyle(
-                                      color: Color(0xFF444466), fontSize: 12)),
-                              Text(
-                                  '${lastLog.totalVolume.toStringAsFixed(0)} kg',
-                                  style: const TextStyle(
-                                      color: Color(0xFFFFD700),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600)),
-                            ],
-                          ),
+                        Text(
+                          '${lastLog!.exercises.length} exercises  ·  '
+                          '${lastLog.totalSets} sets  ·  '
+                          '${lastLog.totalVolume.toStringAsFixed(0)} kg',
+                          style: const TextStyle(
+                              color: Color(0xFF888899), fontSize: 12),
                         ),
                       if (allCompleted && sessionCount > 1)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 5),
-                          child: Text(
-                            '${_dayLogs.fold(0, (s, l) => s + l.totalSets)} sets  ·  '
-                            '${_dayLogs.fold(0.0, (s, l) => s + l.totalVolume).toStringAsFixed(0)} kg total',
-                            style: const TextStyle(
-                                color: Color(0xFF888899), fontSize: 12),
-                          ),
+                        Text(
+                          '${_dayLogs.fold(0, (s, l) => s + l.totalSets)} sets  ·  '
+                          '${_dayLogs.fold(0.0, (s, l) => s + l.totalVolume).toStringAsFixed(0)} kg total',
+                          style: const TextStyle(
+                              color: Color(0xFF888899), fontSize: 12),
+                        ),
+                      if (!hasAnySessions)
+                        const Text(
+                          'Quick Start or build your own from scratch',
+                          style: TextStyle(
+                              color: Color(0xFF555577), fontSize: 12),
                         ),
                     ],
                   ),
@@ -985,49 +820,31 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 const SizedBox(width: 10),
                 Column(
                   children: [
-                    if (!isRest && !noPlan && !allCompleted && !isInProgress)
-                      _PillButton(
-                        label: _isFuture ? 'Plan' : 'Start',
-                        icon: Icons.play_arrow_rounded,
-                        color: accentColor,
-                        onTap: _logWorkout,
-                      ),
-                    if (allCompleted)
-                      _PillButton(
-                        label: 'View',
-                        icon: Icons.visibility_outlined,
-                        color: accentColor,
-                        onTap: () => _openLog(lastLog),
-                      ),
                     if (isInProgress)
                       _PillButton(
                         label: 'Resume',
                         icon: Icons.play_arrow_rounded,
-                        color: accentColor,
+                        color: const Color(0xFFF39C12),
                         onTap: () => _openLog(activeLog),
-                      ),
-                    if (isRest || noPlan)
+                      )
+                    else if (!_isFuture)
                       _PillButton(
-                        label: 'Train',
-                        icon: Icons.fitness_center_rounded,
-                        color: const Color(0xFFFFD700),
-                        onTap: () async {
-                          await Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                  builder: (_) =>
-                                      QuickStartScreen(targetDate: _dateStr)));
-                          _load();
-                        },
+                        label: allCompleted ? '+ Session' : 'Start',
+                        icon: allCompleted
+                            ? Icons.add_rounded
+                            : Icons.play_arrow_rounded,
+                        color: allCompleted
+                            ? const Color(0xFF3498DB)
+                            : const Color(0xFFFFD700),
+                        onTap: _startWorkoutFlow,
                       ),
-                    // Add Session: visible when all done, not a future date
-                    if (allCompleted && !_isFuture) ...[
+                    if (allCompleted) ...[
                       const SizedBox(height: 6),
                       _PillButton(
-                        label: '+ Session',
-                        icon: Icons.add_rounded,
-                        color: const Color(0xFF3498DB),
-                        onTap: _addSession,
+                        label: 'View',
+                        icon: Icons.visibility_outlined,
+                        color: const Color(0xFF2ECC71),
+                        onTap: () => _openLog(lastLog),
                       ),
                     ],
                     const SizedBox(height: 6),
@@ -1053,93 +870,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
 
           // Session list (shown when multiple sessions exist)
           if (sessionCount > 1) _buildSessionList(),
-
-          // Exercise list (planned workout, not started)
-          if (!isRest && !noPlan && !allCompleted && !isInProgress &&
-              _dayExercises.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: Divider(color: Color(0xFF1E1E35), height: 1),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-              child: Column(
-                children: [
-                  ..._dayExercises.take(4).toList().asMap().entries.map((e) {
-                    final i = e.key;
-                    final ex = e.value;
-                    return Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 7),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 22,
-                                height: 22,
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF1E1E35),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Center(
-                                  child: Text('${i + 1}',
-                                      style: const TextStyle(
-                                          color: Color(0xFF555577),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold)),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(ex.name,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w500)),
-                              ),
-                              Text(ex.muscleGroup,
-                                  style: const TextStyle(
-                                      color: Color(0xFF444466),
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ),
-                        if (i < (_dayExercises.take(4).length - 1))
-                          const Divider(color: Color(0xFF1A1A2E), height: 1),
-                      ],
-                    );
-                  }),
-                  if (_dayExercises.length > 4)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4, bottom: 2),
-                      child: Text(
-                        '+ ${_dayExercises.length - 4} more exercises',
-                        style: const TextStyle(
-                            color: Color(0xFFFFD700),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ],
-
-          // Rest day text
-          if (isRest) ...[
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Text(
-                'Recovery is part of the process. Rest well.',
-                style: const TextStyle(
-                    color: Color(0xFF555577), fontSize: 12, height: 1.4),
-              ),
-            ),
-          ] else
-            const SizedBox(height: 16),
         ],
       ),
     );
@@ -1223,18 +953,13 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   // ─── Stats Strip ─────────────────────────────────────────────────────────────
 
   Widget _buildStatsStrip() {
-    final isRest = _dayPlan?.isRestDay ?? false;
     final isInProgress = _activeLog != null;
     final isCompleted = _dayLogs.isNotEmpty && !isInProgress;
 
     String todayStatus;
     Color todayColor;
     IconData todayIcon;
-    if (isRest) {
-      todayStatus = 'Rest';
-      todayColor = const Color(0xFF3498DB);
-      todayIcon = Icons.hotel_rounded;
-    } else if (isCompleted) {
+    if (isCompleted) {
       todayStatus = 'Done';
       todayColor = const Color(0xFF2ECC71);
       todayIcon = Icons.check_circle_rounded;
@@ -1534,11 +1259,12 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ExerciseLibraryScreen()));
       }),
-      _NavItem(Icons.calendar_month_rounded, 'Weekly Plan', 'PPL & routines',
+      _NavItem(Icons.bolt_rounded, 'Quick Start', 'Presets & templates',
           const Color(0xFF9B59B6), () async {
         await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const WorkoutPlanScreen()));
+            MaterialPageRoute(
+                builder: (_) => QuickStartScreen(targetDate: _dateStr)));
         _load();
       }),
       _NavItem(Icons.history_rounded, 'History', 'Past workouts',
@@ -1570,6 +1296,141 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           children: items.map((item) => _NavCard(item: item)).toList(),
         ),
       ],
+    );
+  }
+}
+
+// ─── Start Workout Picker Sheet ───────────────────────────────────────────────
+
+class _StartWorkoutSheet extends StatelessWidget {
+  final VoidCallback onQuickStart;
+  final VoidCallback onCustom;
+
+  const _StartWorkoutSheet({
+    required this.onQuickStart,
+    required this.onCustom,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+          20, 16, 20, 24 + MediaQuery.of(context).padding.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white12,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'Start Workout',
+            style: TextStyle(
+                color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Choose how you want to train today',
+            style: TextStyle(color: Color(0xFF555577), fontSize: 13),
+          ),
+          const SizedBox(height: 20),
+          // Quick Start option
+          _SheetOption(
+            icon: Icons.bolt_rounded,
+            color: const Color(0xFFFFD700),
+            title: 'Quick Start',
+            subtitle: 'Pick from PPL presets or muscle-group templates.\nEdit exercises before you begin.',
+            onTap: onQuickStart,
+          ),
+          const SizedBox(height: 12),
+          // Custom option
+          _SheetOption(
+            icon: Icons.tune_rounded,
+            color: const Color(0xFF3498DB),
+            title: 'Custom Workout',
+            subtitle: 'Start a blank session and add exercises as you go.',
+            onTap: onCustom,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SheetOption extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _SheetOption({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF12121F),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Icon(icon, color: color, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 3),
+                    Text(subtitle,
+                        style: const TextStyle(
+                            color: Color(0xFF555577),
+                            fontSize: 12,
+                            height: 1.4)),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.chevron_right_rounded,
+                  color: color.withValues(alpha: 0.5), size: 20),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

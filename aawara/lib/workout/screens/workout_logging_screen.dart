@@ -591,6 +591,8 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           builder: (_) => QuickStartScreen(targetDate: _log.date),
         ),
       );
+    } else if (mounted) {
+      Navigator.pop(context);
     }
   }
 
