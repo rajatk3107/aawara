@@ -12,7 +12,7 @@
 
     <application
         android:label="Aawara"
-        android:name="${applicationName}"
+        android:name=".MainApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
@@ -42,6 +42,14 @@
             android:foregroundServiceType="health"
             android:exported="false"
             tools:replace="android:exported,android:foregroundServiceType"/>
+
+        <!-- Disable the plugin's WatchdogReceiver — it calls startForegroundService() without
+             then calling startForeground() on re-entry, causing ForegroundServiceDidNotStartInTimeException.
+             We manage service lifecycle entirely from Dart instead. -->
+        <receiver
+            android:name="id.flutter.flutter_background_service.WatchdogReceiver"
+            android:enabled="false"
+            tools:replace="android:enabled"/>
 
         <!-- Required by image_cropper (uCrop) -->
         <activity

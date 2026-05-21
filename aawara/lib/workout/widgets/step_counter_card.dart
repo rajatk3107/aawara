@@ -17,6 +17,7 @@ class _StepCounterCardState extends State<StepCounterCard> {
   int _steps = 0;
   int _goal = 8000;
   bool _goalJustReached = false;
+  bool _refreshing = false;
   StreamSubscription<StepUpdate>? _sub;
   Timer? _goalBannerTimer;
 
@@ -86,6 +87,24 @@ class _StepCounterCardState extends State<StepCounterCard> {
     );
     if (result != null && mounted) {
       setState(() => _goal = result);
+    }
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
+    // Ask the service to push a fresh update via the stream
+    await StepTrackingService.refreshStream();
+    // Also read directly so the card updates even when the service stream is idle
+    final steps = await StepTrackingService.getTodaySteps();
+    final prefs = await SharedPreferences.getInstance();
+    final goal = prefs.getInt('step_goal') ?? 8000;
+    if (mounted) {
+      setState(() {
+        _steps = steps;
+        _goal = goal;
+        _refreshing = false;
+      });
     }
   }
 
@@ -164,6 +183,30 @@ class _StepCounterCardState extends State<StepCounterCard> {
             const Text('Steps',
                 style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
             const Spacer(),
+            GestureDetector(
+              onTap: _refresh,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _refreshing
+                      ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+                      : const Color(0xFF2A2A45),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: AnimatedRotation(
+                  turns: _refreshing ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 500),
+                  child: Icon(
+                    Icons.refresh_rounded,
+                    color: _refreshing
+                        ? const Color(0xFFFFD700)
+                        : const Color(0xFFAAAAAA),
+                    size: 16,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [

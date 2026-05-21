@@ -39,6 +39,7 @@ class StepUpdate {
   const StepUpdate({required this.steps, required this.goal});
 }
 
+@pragma('vm:entry-point')
 class StepTrackingService {
   static final _stepController =
       StreamController<StepUpdate>.broadcast();
@@ -46,12 +47,21 @@ class StepTrackingService {
   static Stream<StepUpdate> get stepStream => _stepController.stream;
 
   static Future<void> initialize() async {
-    if (Platform.isAndroid) {
-      await _initAndroid();
+    if (Platform.isAndroid && await isEnabled()) {
+      // Configure the service early — this creates the 'aawara_steps'
+      // notification channel before the WatchdogReceiver auto-starts the
+      // background service. Without the channel the service crashes immediately
+      // with CannotPostForegroundServiceNotificationException.
+      await _configureAndroidService();
+      _listenToAndroidUpdates();
     }
-    // Push current step count to stream after first frame so widgets
-    // that subscribe in initState() receive the value immediately.
-    SchedulerBinding.instance.addPostFrameCallback((_) => refreshStream());
+    // Actually start the service (and push initial steps) only after the first
+    // frame — Activity is on-screen by then so Android 12+ won't throw
+    // ForegroundServiceStartNotAllowedException.
+    SchedulerBinding.instance.addPostFrameCallback((_) async {
+      if (Platform.isAndroid) await _startAndroidServiceIfNeeded();
+      await refreshStream();
+    });
   }
 
   static Future<bool> isEnabled() async {
@@ -88,6 +98,13 @@ class StepTrackingService {
     return row != null ? (row['steps'] as num).toInt() : 0;
   }
 
+  // Called on every app resume to ensure the Android service is running
+  // (it may not have started successfully on cold-start on Android 12+).
+  static Future<void> ensureAndroidServiceRunning() async {
+    if (!Platform.isAndroid) return;
+    await _startAndroidServiceIfNeeded();
+  }
+
   // Push latest step count to UI stream — called on app open and resume.
   // On iOS this also writes to the DB so the progress chart stays current.
   static Future<void> refreshStream() async {
@@ -104,16 +121,9 @@ class StepTrackingService {
 
   // ── Android ──────────────────────────────────────────────────────────────
 
-  static Future<void> _initAndroid() async {
-    if (!await isEnabled()) return;
-    final svc = FlutterBackgroundService();
-    final running = await svc.isRunning();
-    if (!running) {
-      await _configureAndroidService();
-      await svc.startService();
-    }
-    // Relay background service events to the UI stream
-    svc.on('stepUpdate').listen((data) {
+  // Wire up the UI stream listener (synchronous — no async needed).
+  static void _listenToAndroidUpdates() {
+    FlutterBackgroundService().on('stepUpdate').listen((data) {
       if (data == null) return;
       _stepController.add(StepUpdate(
         steps: (data['steps'] as num?)?.toInt() ?? 0,
@@ -122,13 +132,30 @@ class StepTrackingService {
     });
   }
 
+  // Safe only after first frame: start the service if it isn't already running.
+  static Future<void> _startAndroidServiceIfNeeded() async {
+    if (!await isEnabled()) return;
+    try {
+      final svc = FlutterBackgroundService();
+      final running = await svc.isRunning();
+      if (!running) {
+        await _configureAndroidService();
+        await svc.startService();
+      }
+    } catch (_) {
+      // ForegroundServiceStartNotAllowedException or similar — ignore,
+      // the service will be started on the next foreground resume.
+    }
+  }
+
   static Future<bool> _enableAndroid() async {
     // 1. Request ACTIVITY_RECOGNITION permission
     final status = await Permission.activityRecognition.request();
     if (!status.isGranted) return false;
 
-    // 2. Configure and start background service
+    // 2. Configure (creates channel), wire listener, and start service
     await _configureAndroidService();
+    _listenToAndroidUpdates();
     await FlutterBackgroundService().startService();
 
     // 3. Mark enabled
@@ -146,7 +173,7 @@ class StepTrackingService {
     await svc.configure(
       androidConfiguration: AndroidConfiguration(
         onStart: _onAndroidServiceStart,
-        autoStart: true,
+        autoStart: false,
         isForegroundMode: true,
         notificationChannelId: 'aawara_steps',
         initialNotificationTitle: 'Aawara · Step Counter',

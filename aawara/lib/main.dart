@@ -58,10 +58,10 @@ class _LifecycleWrapperState extends State<_LifecycleWrapper>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // resumed fires when app comes back from background.
-    // inactive → active sequence (initial open) is covered by the
-    // postFrameCallback in StepTrackingService.initialize().
     if (state == AppLifecycleState.resumed) {
+      // Ensure service is running (may have failed on cold-start if the
+      // Activity wasn't visible yet) then push fresh step count to UI.
+      StepTrackingService.ensureAndroidServiceRunning();
       StepTrackingService.refreshStream();
     }
   }
