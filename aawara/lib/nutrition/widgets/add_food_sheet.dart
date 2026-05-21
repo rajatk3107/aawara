@@ -33,12 +33,14 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
   final _db = WorkoutDatabase.instance;
   final _searchCtrl = TextEditingController();
   final _qtyCtrl = TextEditingController(text: '1');
+  final _gramsCtrl = TextEditingController();
 
   List<Food> _results = [];
   bool _searching = false;
   Food? _selected;
-  double _quantity = 1.0;
+  double _quantity = 1.0; // always in servings internally
   bool _adding = false;
+  bool _byGrams = false; // false = count/serving mode, true = gram mode
 
   @override
   void initState() {
@@ -50,8 +52,49 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
   void dispose() {
     _searchCtrl.dispose();
     _qtyCtrl.dispose();
+    _gramsCtrl.dispose();
     super.dispose();
   }
+
+  // Returns smart natural-unit label for a food (singular).
+  String _naturalUnit(Food food) {
+    final n = food.name.toLowerCase();
+    if (n.contains('egg')) return 'egg';
+    if (n.contains('idli')) return 'idli';
+    if (n.contains('dosa')) return 'dosa';
+    if (n.contains('uttapam')) return 'piece';
+    if (n.contains('roti') || n.contains('chapati')) return 'roti';
+    if (n.contains('paratha')) return 'paratha';
+    if (n.contains('puri')) return 'puri';
+    if (n.contains('naan') || n.contains('kulcha') || n.contains('bhatura')) return 'piece';
+    if (n.contains('samosa')) return 'samosa';
+    if (n.contains('vada') || n.contains('wada')) return 'vada';
+    if (n.contains('dhokla') || n.contains('thepla')) return 'piece';
+    if (n.contains('gulab jamun') || n.contains('rasgulla')) return 'piece';
+    if (n.contains('laddoo') || n.contains('barfi') || n.contains('kaju')) return 'piece';
+    if (food.servingUnit == 'ml') return 'glass';
+    if (food.servingSize >= 150) return 'bowl';
+    if (food.servingSize >= 80) return 'bowl';
+    return 'serving';
+  }
+
+  String _pluralUnit(Food food) {
+    final u = _naturalUnit(food);
+    const noChange = {'serving'};
+    if (noChange.contains(u)) return '${u}s';
+    return '${u}s';
+  }
+
+  // Natural-unit step: whole pieces for countable items, 0.5 for bowls/glasses
+  double _countStep(Food food) {
+    final u = _naturalUnit(food);
+    const wholeOnly = {'egg', 'idli', 'dosa', 'roti', 'paratha', 'puri',
+        'samosa', 'vada', 'piece', 'uttapam', 'naan'};
+    return wholeOnly.contains(u) ? 1.0 : 0.5;
+  }
+
+  // Gram step: 10g for small foods, 25g for larger
+  double _gramStep(Food food) => food.servingSize <= 50 ? 10 : 25;
 
   Future<void> _search(String q) async {
     setState(() => _searching = true);
@@ -67,12 +110,51 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     if (mounted) Navigator.pop(context, true);
   }
 
+  void _selectFood(Food food) {
+    setState(() {
+      _selected = food;
+      _quantity = 1.0;
+      _byGrams = false;
+      _qtyCtrl.text = '1';
+      _gramsCtrl.text = food.servingSize.round().toString();
+    });
+  }
+
+  void _switchMode(bool toGrams) {
+    if (_selected == null) return;
+    setState(() {
+      if (toGrams) {
+        // Convert current serving count → grams
+        final g = (_quantity * _selected!.servingSize).roundToDouble();
+        _gramsCtrl.text = g.round().toString();
+      } else {
+        // Convert current grams → serving count
+        final g = double.tryParse(_gramsCtrl.text) ?? _selected!.servingSize;
+        final q = (g / _selected!.servingSize);
+        _quantity = (q * 4).round() / 4; // round to nearest 0.25
+        _qtyCtrl.text = _fmtQty(_quantity);
+      }
+      _byGrams = toGrams;
+    });
+  }
+
   void _adjustQty(double delta) {
     final next = (_quantity + delta).clamp(0.25, 99.0);
     final rounded = (next * 4).round() / 4;
     setState(() {
       _quantity = rounded;
       _qtyCtrl.text = _fmtQty(rounded);
+    });
+  }
+
+  void _adjustGrams(double delta) {
+    if (_selected == null) return;
+    final cur = double.tryParse(_gramsCtrl.text) ?? _selected!.servingSize;
+    final next = (cur + delta).clamp(1.0, 9999.0);
+    final rounded = next.roundToDouble();
+    setState(() {
+      _gramsCtrl.text = rounded.toInt().toString();
+      _quantity = rounded / _selected!.servingSize;
     });
   }
 
@@ -112,6 +194,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                     onTap: () => setState(() {
                       _selected = null;
                       _quantity = 1.0;
+                      _byGrams = false;
                       _qtyCtrl.text = '1';
                     }),
                     child: const Padding(
@@ -234,11 +317,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
 
   Widget _buildFoodTile(Food food) {
     return InkWell(
-      onTap: () => setState(() {
-        _selected = food;
-        _quantity = 1.0;
-        _qtyCtrl.text = '1';
-      }),
+      onTap: () => _selectFood(food),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
         child: Row(
@@ -279,77 +358,50 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     final prot = f.proteinG * _quantity;
     final carbs = f.carbsG * _quantity;
     final fat = f.fatG * _quantity;
-    final servingAmt = (f.servingSize * _quantity);
+    final totalGrams = _quantity * f.servingSize;
+    final unit = _naturalUnit(f);
+    final unitLabel = _quantity == 1.0 ? unit : _pluralUnit(f);
+    final gramStep = _gramStep(f);
+    final countStep = _countStep(f);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('per ${f.servingSize.round()}${f.servingUnit}',
-              style: const TextStyle(color: Color(0xFF555577), fontSize: 13)),
-          const SizedBox(height: 20),
+          // Serving reference
+          Text(
+            'per ${f.servingSize.round()}${f.servingUnit} · 1 $unit',
+            style: const TextStyle(color: Color(0xFF555577), fontSize: 13),
+          ),
+          const SizedBox(height: 14),
 
-          // Quantity row
+          // Mode toggle
           Container(
-            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D0D1A),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            padding: const EdgeInsets.all(3),
+            child: Row(
+              children: [
+                _modeTab('By count', !_byGrams, () => _switchMode(false)),
+                _modeTab('By grams', _byGrams, () => _switchMode(true)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Quantity input
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
             decoration: BoxDecoration(
               color: const Color(0xFF0D0D1A),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Column(
-              children: [
-                const Text('Servings',
-                    style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
-                const SizedBox(height: 12),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    _stepBtn(Icons.remove_rounded,
-                        () => _adjustQty(-0.25)),
-                    const SizedBox(width: 28),
-                    Column(
-                      children: [
-                        SizedBox(
-                          width: 72,
-                          child: TextField(
-                            controller: _qtyCtrl,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold),
-                            keyboardType: const TextInputType.numberWithOptions(
-                                decimal: true),
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(
-                                  RegExp(r'^\d+\.?\d{0,2}'))
-                            ],
-                            decoration: const InputDecoration(
-                                border: InputBorder.none,
-                                isDense: true,
-                                contentPadding: EdgeInsets.zero),
-                            onChanged: (v) {
-                              final parsed = double.tryParse(v);
-                              if (parsed != null && parsed > 0) {
-                                setState(() => _quantity = parsed);
-                              }
-                            },
-                          ),
-                        ),
-                        Text(
-                          '${servingAmt % 1 == 0 ? servingAmt.toInt() : servingAmt.toStringAsFixed(1)}${f.servingUnit}',
-                          style: const TextStyle(
-                              color: Color(0xFF555577), fontSize: 12),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(width: 28),
-                    _stepBtn(Icons.add_rounded, () => _adjustQty(0.25)),
-                  ],
-                ),
-              ],
-            ),
+            child: _byGrams
+                ? _buildGramInput(f, gramStep, totalGrams)
+                : _buildCountInput(f, countStep, totalGrams, unitLabel),
           ),
           const SizedBox(height: 14),
 
@@ -404,7 +456,144 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     );
   }
 
-  Widget _stepBtn(IconData icon, VoidCallback onTap) {
+  Widget _modeTab(String label, bool active, VoidCallback onTap) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: active ? const Color(0xFF1A1A2E) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: active ? Colors.white : const Color(0xFF555577),
+              fontSize: 13,
+              fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCountInput(
+      Food f, double step, double totalGrams, String unitLabel) {
+    final gramsStr = totalGrams % 1 == 0
+        ? totalGrams.toInt().toString()
+        : totalGrams.toStringAsFixed(1);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _stepBtn(Icons.remove_rounded,
+            _quantity > step ? () => _adjustQty(-step) : null),
+        const SizedBox(width: 24),
+        Column(
+          children: [
+            SizedBox(
+              width: 80,
+              child: TextField(
+                controller: _qtyCtrl,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold),
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,2}'))
+                ],
+                decoration: const InputDecoration(
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: EdgeInsets.zero),
+                onChanged: (v) {
+                  final parsed = double.tryParse(v);
+                  if (parsed != null && parsed > 0) {
+                    setState(() => _quantity = parsed);
+                  }
+                },
+              ),
+            ),
+            Text(unitLabel,
+                style: const TextStyle(
+                    color: Color(0xFF555577), fontSize: 13)),
+            const SizedBox(height: 4),
+            Text('= $gramsStr${f.servingUnit}',
+                style: const TextStyle(
+                    color: Color(0xFF444466), fontSize: 11)),
+          ],
+        ),
+        const SizedBox(width: 24),
+        _stepBtn(Icons.add_rounded, () => _adjustQty(step)),
+      ],
+    );
+  }
+
+  Widget _buildGramInput(Food f, double step, double totalGrams) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _stepBtn(Icons.remove_rounded,
+            totalGrams > step ? () => _adjustGrams(-step) : null),
+        const SizedBox(width: 24),
+        Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                SizedBox(
+                  width: 90,
+                  child: TextField(
+                    controller: _gramsCtrl,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly
+                    ],
+                    decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero),
+                    onChanged: (v) {
+                      final g = double.tryParse(v);
+                      if (g != null && g > 0) {
+                        setState(() => _quantity = g / f.servingSize);
+                      }
+                    },
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: Text(f.servingUnit,
+                      style: const TextStyle(
+                          color: Color(0xFF555577), fontSize: 16)),
+                ),
+              ],
+            ),
+            Text(
+              '= ${_fmtQty(_quantity)} ${_naturalUnit(f)}${_quantity != 1 ? 's' : ''}',
+              style: const TextStyle(
+                  color: Color(0xFF444466), fontSize: 11),
+            ),
+          ],
+        ),
+        const SizedBox(width: 24),
+        _stepBtn(Icons.add_rounded, () => _adjustGrams(step)),
+      ],
+    );
+  }
+
+  Widget _stepBtn(IconData icon, VoidCallback? onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -414,7 +603,11 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
           color: const Color(0xFF1A1A2E),
           borderRadius: BorderRadius.circular(11),
         ),
-        child: Icon(icon, color: Colors.white, size: 22),
+        child: Icon(icon,
+            color: onTap == null
+                ? const Color(0xFF333355)
+                : Colors.white,
+            size: 22),
       ),
     );
   }
