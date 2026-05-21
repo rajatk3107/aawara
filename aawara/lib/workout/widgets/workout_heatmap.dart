@@ -123,7 +123,7 @@ class _WorkoutHeatmapState extends State<WorkoutHeatmap> {
       for (int d = 0; d < 7; d++) {
         final day = weekMondays[i].add(Duration(days: d));
         final ds = _fmt(day);
-        if (ds >= fromStr && ds <= todayStr) {
+        if (ds.compareTo(fromStr) >= 0 && ds.compareTo(todayStr) <= 0) {
           if (day.month != lastMonth) {
             monthLabelByCol[i] = _monthNames[day.month - 1];
             lastMonth = day.month;
@@ -186,7 +186,8 @@ class _WorkoutHeatmapState extends State<WorkoutHeatmap> {
                             final day = mon.add(Duration(days: d));
                             final dateStr = _fmt(day);
                             final inRange =
-                                dateStr >= fromStr && dateStr <= todayStr;
+                                dateStr.compareTo(fromStr) >= 0 &&
+                                dateStr.compareTo(todayStr) <= 0;
                             final count =
                                 inRange ? (_counts[dateStr] ?? 0) : -1;
                             return GestureDetector(
