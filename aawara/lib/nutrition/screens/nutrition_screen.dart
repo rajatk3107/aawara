@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../workout/widgets/step_counter_card.dart';
 import '../widgets/add_food_sheet.dart';
 import '../widgets/water_tracker_card.dart';
 import 'meal_presets_screen.dart';
@@ -144,6 +145,8 @@ class _NutritionScreenState extends State<NutritionScreen> {
                     _buildMacroSummary(),
                     const SizedBox(height: 12),
                     WaterTrackerCard(date: _dateStr),
+                    const SizedBox(height: 12),
+                    const StepCounterCard(),
                     const SizedBox(height: 12),
                     ..._meals.map(_buildMealSection),
                   ],

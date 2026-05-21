@@ -26,7 +26,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 12,
+      version: 13,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -44,6 +44,7 @@ class WorkoutDatabase {
     if (oldVersion < 10) await _migrateV10(db);
     if (oldVersion < 11) await _migrateV11(db);
     if (oldVersion < 12) await _migrateV12(db);
+    if (oldVersion < 13) await _migrateV13(db);
   }
 
   Future<void> _migrateV11(Database db) async {
@@ -54,6 +55,18 @@ class WorkoutDatabase {
         file_path TEXT NOT NULL,
         note TEXT,
         created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+  }
+
+  Future<void> _migrateV13(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS step_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        steps INTEGER NOT NULL DEFAULT 0,
+        goal INTEGER NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     ''');
   }
@@ -467,6 +480,16 @@ class WorkoutDatabase {
         file_path TEXT NOT NULL,
         note TEXT,
         created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE step_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        steps INTEGER NOT NULL DEFAULT 0,
+        goal INTEGER NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     ''');
 
@@ -3355,6 +3378,37 @@ class WorkoutDatabase {
     return rows
         .map((r) => DailyNutritionSummary.fromMap(Map<String, dynamic>.from(r)))
         .toList();
+  }
+
+  Future<void> upsertStepLog(String date, int steps, int goal) async {
+    final db = await database;
+    await db.rawInsert('''
+      INSERT INTO step_logs (date, steps, goal, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(date) DO UPDATE SET
+        steps = excluded.steps,
+        goal = excluded.goal,
+        updated_at = excluded.updated_at
+    ''', [date, steps, goal]);
+  }
+
+  Future<Map<String, dynamic>?> getStepLog(String date) async {
+    final db = await database;
+    final rows =
+        await db.query('step_logs', where: 'date = ?', whereArgs: [date]);
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<List<Map<String, dynamic>>> getStepHistory(int days) async {
+    final db = await database;
+    final from = DateTime.now().subtract(Duration(days: days - 1));
+    final fromStr =
+        '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
+    final rows = await db.query('step_logs',
+        where: 'date >= ?',
+        whereArgs: [fromStr],
+        orderBy: 'date ASC');
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
   Future<void> close() async {

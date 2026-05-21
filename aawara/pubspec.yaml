@@ -28,6 +28,10 @@ dependencies:
   flutter_timezone: ^5.0.2
   mobile_scanner: ^6.0.0
   http: ^1.2.2
+  pedometer: ^4.0.0
+  flutter_background_service: ^5.0.0
+  health: ^13.1.4
+  permission_handler: ^11.0.0
 
 dependency_overrides:
   intl: ^0.20.0

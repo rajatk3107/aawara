@@ -26,6 +26,21 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Camera is used to scan food product barcodes</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Aawara reads your step count from Apple Health to track your daily activity goal.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Aawara saves your workout data to Apple Health.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Aawara uses motion data to count your daily steps.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.aawara.steprefresh</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

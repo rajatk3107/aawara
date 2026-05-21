@@ -1,12 +1,14 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
 import '../widgets/workout_heatmap.dart';
 import 'exercise_progress_screen.dart';
 import 'progress_photos_screen.dart';
+import 'step_goal_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
@@ -45,6 +47,12 @@ class _ProgressScreenState extends State<ProgressScreen>
   List<DailyNutritionSummary> _nutritionHistory = [];
   NutritionGoals _nutGoals = NutritionGoals.defaults;
   bool _nutritionLoading = false;
+
+  // Step history
+  List<Map<String, dynamic>> _stepHistory = [];
+  int _stepGoal = 8000;
+  bool _stepHistoryLoaded = false;
+  int? _stepTouchedIndex;
 
   // Heatmap
   int _heatmapMonths = 6;
@@ -90,6 +98,20 @@ class _ProgressScreenState extends State<ProgressScreen>
     }
     if (exercises.isNotEmpty) _selectExercise(exercises.first);
     _loadWeightData();
+    _loadStepHistory();
+  }
+
+  Future<void> _loadStepHistory() async {
+    final rows = await _db.getStepHistory(7);
+    final prefs = await SharedPreferences.getInstance();
+    final goal = prefs.getInt('step_goal') ?? 8000;
+    if (mounted) {
+      setState(() {
+        _stepHistory = rows;
+        _stepGoal = goal;
+        _stepHistoryLoaded = true;
+      });
+    }
   }
 
   Future<void> _loadWeightData() async {
@@ -301,8 +323,232 @@ class _ProgressScreenState extends State<ProgressScreen>
           const SizedBox(height: 12),
           _buildProgressDetail(),
         ],
+        const SizedBox(height: 28),
+        _buildSectionHeader('Daily Steps'),
+        const SizedBox(height: 12),
+        _buildStepHistorySection(),
         const SizedBox(height: 32),
       ],
+    );
+  }
+
+  Widget _buildStepHistorySection() {
+    if (!_stepHistoryLoaded) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: CircularProgressIndicator(
+              color: Color(0xFFFFD700), strokeWidth: 2),
+        ),
+      );
+    }
+    if (_stepHistory.isEmpty) {
+      return const SizedBox(
+        height: 120,
+        child: EmptyStateWidget(
+          icon: Icons.directions_walk_rounded,
+          title: 'No step data yet',
+          subtitle: 'Enable step tracking in Settings to start '
+              'seeing your daily activity here.',
+        ),
+      );
+    }
+
+    // Build a 7-day window (fill missing days with 0)
+    final now = DateTime.now();
+    final days = List.generate(7, (i) {
+      final d = now.subtract(Duration(days: 6 - i));
+      return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    });
+    final dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    final byDate = {for (final r in _stepHistory) r['date'] as String: r};
+
+    final stepValues = days.map((d) {
+      final r = byDate[d];
+      return r != null ? (r['steps'] as num).toInt() : 0;
+    }).toList();
+
+    final maxSteps =
+        stepValues.reduce((a, b) => a > b ? a : b).toDouble();
+    final chartMax =
+        (maxSteps > _stepGoal ? maxSteps * 1.2 : _stepGoal * 1.2)
+            .ceilToDouble();
+
+    // Summary stats
+    final nonZero = stepValues.where((s) => s > 0).toList();
+    final avg = nonZero.isEmpty
+        ? 0
+        : (nonZero.reduce((a, b) => a + b) / nonZero.length).round();
+    final best = stepValues.reduce((a, b) => a > b ? a : b);
+    final goalMet = stepValues.where((s) => s >= _stepGoal).length;
+
+    Color barColor(int steps) {
+      if (_stepGoal <= 0) return const Color(0xFFFFD700);
+      final pct = steps / _stepGoal;
+      if (pct >= 1.0) return const Color(0xFFFFD700);
+      if (pct >= 0.75) return const Color(0xFFFFD700).withValues(alpha: 0.6);
+      if (pct >= 0.5) return const Color(0xFFFFD700).withValues(alpha: 0.35);
+      return const Color(0xFF2A2A3E);
+    }
+
+    String fmtK(int n) {
+      if (n >= 1000) {
+        final k = (n / 1000).toStringAsFixed(1);
+        return '${k}k';
+      }
+      return n.toString();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 180,
+          child: BarChart(
+            BarChartData(
+              alignment: BarChartAlignment.spaceAround,
+              maxY: chartMax,
+              barTouchData: BarTouchData(
+                touchCallback: (event, response) {
+                  if (event is FlTapUpEvent) {
+                    setState(() {
+                      final idx = response?.spot?.touchedBarGroupIndex;
+                      _stepTouchedIndex =
+                          _stepTouchedIndex == idx ? null : idx;
+                    });
+                  }
+                },
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipColor: (_) => const Color(0xFF1A1A2E),
+                  tooltipPadding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  getTooltipItem: (group, _, rod, __) {
+                    final steps = rod.toY.round();
+                    final pct = _stepGoal > 0
+                        ? (steps / _stepGoal * 100).round()
+                        : 0;
+                    final dist = (steps * 0.000762).toStringAsFixed(1);
+                    final cal = (steps * 0.038).round();
+                    return BarTooltipItem(
+                      '${fmtK(steps)} steps\n$pct% · ~$dist km · ~$cal kcal',
+                      const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          height: 1.5),
+                    );
+                  },
+                ),
+              ),
+              titlesData: FlTitlesData(
+                leftTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (v, _) {
+                      final idx = v.toInt();
+                      if (idx < 0 || idx >= days.length) {
+                        return const SizedBox.shrink();
+                      }
+                      final d = DateTime.parse(days[idx]);
+                      return Text(
+                        dayLabels[d.weekday - 1],
+                        style: const TextStyle(
+                            color: Color(0xFF444466), fontSize: 9),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              gridData: FlGridData(
+                drawVerticalLine: false,
+                getDrawingHorizontalLine: (_) =>
+                    const FlLine(color: Color(0xFF1E1E35), strokeWidth: 1),
+              ),
+              borderData: FlBorderData(show: false),
+              extraLinesData: ExtraLinesData(horizontalLines: [
+                HorizontalLine(
+                  y: _stepGoal.toDouble(),
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.5),
+                  strokeWidth: 1.5,
+                  dashArray: [4, 4],
+                ),
+              ]),
+              barGroups: List.generate(7, (i) {
+                final steps = stepValues[i];
+                final isSelected = _stepTouchedIndex == i;
+                return BarChartGroupData(
+                  x: i,
+                  showingTooltipIndicators:
+                      isSelected && steps > 0 ? [0] : [],
+                  barRods: [
+                    BarChartRodData(
+                      toY: steps > 0 ? steps.toDouble() : 0,
+                      width: 18,
+                      borderRadius: BorderRadius.circular(4),
+                      color: steps > 0
+                          ? barColor(steps)
+                          : const Color(0xFF1E1E35),
+                    ),
+                  ],
+                );
+              }),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            _stepChip('Avg', fmtK(avg)),
+            const SizedBox(width: 8),
+            _stepChip('Best', fmtK(best)),
+            const SizedBox(width: 8),
+            _stepChip('Goal met', '$goalMet/7'),
+            const Spacer(),
+            GestureDetector(
+              onTap: () async {
+                final result = await Navigator.push<int>(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          const StepGoalScreen(isFirstSetup: false)),
+                );
+                if (result != null) _loadStepHistory();
+              },
+              child: const Text('Change goal ›',
+                  style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _stepChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$label: ',
+              style: const TextStyle(
+                  color: Color(0xFF555577), fontSize: 11)),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+        ],
+      ),
     );
   }
 
