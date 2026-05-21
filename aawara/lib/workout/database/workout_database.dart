@@ -839,6 +839,38 @@ class WorkoutDatabase {
     return log;
   }
 
+  Future<List<WorkoutLog>> getWorkoutLogsForDate(String date) async {
+    final db = await database;
+    final maps = await db.query(
+      'workout_logs',
+      where: 'date = ?',
+      whereArgs: [date],
+      orderBy: 'rowid ASC',
+    );
+    final logs = <WorkoutLog>[];
+    for (final map in maps) {
+      final log = WorkoutLog.fromMap(map);
+      log.exercises.addAll(await _getExerciseLogs(db, log.id));
+      logs.add(log);
+    }
+    return logs;
+  }
+
+  Future<WorkoutLog?> getWorkoutLogById(String id) async {
+    final db = await database;
+    final maps = await db.query('workout_logs', where: 'id = ?', whereArgs: [id]);
+    if (maps.isEmpty) return null;
+    final log = WorkoutLog.fromMap(maps.first);
+    log.exercises.addAll(await _getExerciseLogs(db, log.id));
+    return log;
+  }
+
+  Future<WorkoutLog> createWorkoutLog(WorkoutLog log) async {
+    final db = await database;
+    await db.insert('workout_logs', log.toMap());
+    return log;
+  }
+
   Future<List<WorkoutLog>> getAllWorkoutLogs() async {
     final db = await database;
     final maps = await db.query('workout_logs', orderBy: 'date DESC');

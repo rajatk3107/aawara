@@ -9,6 +9,7 @@ import '../models/workout_log.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
 import 'workout_complete_screen.dart';
+import 'quick_start_screen.dart';
 
 class WorkoutLoggingScreen extends StatefulWidget {
   final WorkoutLog workoutLog;
@@ -486,7 +487,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     await _db.updateWorkoutLog(updated);
     setState(() => _log = updated);
     if (!mounted) return;
-    await Navigator.push(
+    final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
         builder: (_) => WorkoutCompleteScreen(
@@ -496,6 +497,14 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         ),
       ),
     );
+    if (result == 'add_session' && mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => QuickStartScreen(targetDate: _log.date),
+        ),
+      );
+    }
   }
 
   Future<void> _undoComplete() async {

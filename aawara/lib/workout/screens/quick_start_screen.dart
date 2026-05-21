@@ -171,7 +171,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
       date: widget.targetDate,
       workoutName: _workoutName,
     );
-    final created = await _db.createOrGetWorkoutLog(log);
+    final created = await _db.createWorkoutLog(log);
     for (int i = 0; i < _exercises.length; i++) {
       await _db.createExerciseLog(ExerciseLog(
         id: uuid.v4(),
@@ -180,7 +180,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
         orderIndex: i,
       ));
     }
-    final fullLog = await _db.getWorkoutLogForDate(widget.targetDate);
+    final fullLog = await _db.getWorkoutLogById(created.id);
     setState(() => _loading = false);
     if (fullLog != null && mounted) {
       Navigator.pushReplacement(

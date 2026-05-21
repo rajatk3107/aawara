@@ -29,8 +29,19 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
 
   DateTime _selectedDate = DateTime.now();
   WorkoutPlanDay? _dayPlan;
-  WorkoutLog? _dayLog;
+  List<WorkoutLog> _dayLogs = [];
   List<Exercise> _dayExercises = [];
+
+  // The in-progress session (if any), else the last session.
+  WorkoutLog? get _dayLog {
+    if (_dayLogs.isEmpty) return null;
+    try { return _dayLogs.firstWhere((l) => !l.completed); }
+    catch (_) { return _dayLogs.last; }
+  }
+  WorkoutLog? get _activeLog {
+    try { return _dayLogs.firstWhere((l) => !l.completed); }
+    catch (_) { return null; }
+  }
 
   // Stats
   int _streak = 0;
@@ -99,7 +110,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
 
       final results = await Future.wait([
         _db.getPlanDayForWeekday(_selectedDate.weekday),
-        _db.getWorkoutLogForDate(_dateStr),
+        _db.getWorkoutLogsForDate(_dateStr),
         _db.getWorkoutStreak(),
         _db.getWeeklyWorkoutCount(),
         _db.getMonthlyWorkoutCount(),
@@ -112,7 +123,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       ]);
 
       final planDay = results[0] as WorkoutPlanDay?;
-      final log = results[1] as WorkoutLog?;
+      final logs = results[1] as List<WorkoutLog>;
       final streak = results[2] as int;
       final weekly = results[3] as int;
       final monthly = results[4] as int;
@@ -144,7 +155,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       if (mounted) {
         setState(() {
           _dayPlan = planDay;
-          _dayLog = log;
+          _dayLogs = logs;
           _dayExercises = exercises;
           _streak = streak;
           _weeklyCount = weekly;
@@ -200,7 +211,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   Future<void> _loadForDate() async {
     try {
       final planDay = await _db.getPlanDayForWeekday(_selectedDate.weekday);
-      final log = await _db.getWorkoutLogForDate(_dateStr);
+      final logs = await _db.getWorkoutLogsForDate(_dateStr);
 
       List<Exercise> exercises = [];
       if (planDay != null && !planDay.isRestDay) {
@@ -215,7 +226,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       if (mounted) {
         setState(() {
           _dayPlan = planDay;
-          _dayLog = log;
+          _dayLogs = logs;
           _dayExercises = exercises;
         });
       }
@@ -243,13 +254,34 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     _load();
   }
 
-  Future<void> _openLog() async {
-    if (_dayLog == null) return;
+  Future<void> _openLog([WorkoutLog? specificLog]) async {
+    final log = specificLog ?? _dayLog;
+    if (log == null) return;
     await Navigator.push(
       context,
-      MaterialPageRoute(
-          builder: (_) => WorkoutLoggingScreen(workoutLog: _dayLog!)),
+      MaterialPageRoute(builder: (_) => WorkoutLoggingScreen(workoutLog: log)),
     );
+    _load();
+  }
+
+  Future<void> _addSession() async {
+    if (_dayExercises.isNotEmpty) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => QuickStartScreen(
+            targetDate: _dateStr,
+            preloadedName: _dayPlan?.workoutName ?? 'Workout',
+            preloadedExercises: _dayExercises,
+          ),
+        ),
+      );
+    } else {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => QuickStartScreen(targetDate: _dateStr)),
+      );
+    }
     _load();
   }
 
@@ -326,7 +358,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   }
 
   void _showDayOptions() {
-    final hasLog = _dayLog != null;
+    final hasLog = _dayLogs.isNotEmpty;
     final isRest = _dayPlan?.isRestDay ?? false;
 
     showModalBottomSheet(
@@ -380,12 +412,14 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   Navigator.pop(context);
                   final confirm = await _confirmDialog(
                     'Clear Workout Log?',
-                    'This will permanently delete the logged workout for this day.',
+                    'This will permanently delete all workout sessions for this day.',
                     confirmLabel: 'Clear',
                     confirmColor: const Color(0xFFE74C3C),
                   );
                   if (confirm == true) {
-                    await _db.deleteWorkoutLog(_dayLog!.id);
+                    for (final l in _dayLogs) {
+                      await _db.deleteWorkoutLog(l.id);
+                    }
                     _load();
                   }
                 },
@@ -412,7 +446,9 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                       confirmColor: const Color(0xFF3498DB),
                     );
                     if (confirm != true) return;
-                    await _db.deleteWorkoutLog(_dayLog!.id);
+                    for (final l in _dayLogs) {
+                      await _db.deleteWorkoutLog(l.id);
+                    }
                   }
                   _toggleRestDay();
                 },
@@ -806,21 +842,27 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   Widget _buildWorkoutCard() {
     final isRest = _dayPlan?.isRestDay ?? false;
     final noPlan = _dayPlan == null;
-    final isCompleted = _dayLog?.completed == true;
-    final isInProgress = _dayLog != null && !isCompleted;
+    final activeLog = _activeLog;
+    final isInProgress = activeLog != null;
+    final hasAnySessions = _dayLogs.isNotEmpty;
+    final allCompleted = hasAnySessions && !isInProgress;
+    final sessionCount = _dayLogs.length;
+    final lastLog = _dayLogs.isEmpty ? null : _dayLogs.last;
 
     Color accentColor;
     String badge;
     String title;
 
-    if (isCompleted) {
+    if (allCompleted) {
       accentColor = const Color(0xFF2ECC71);
-      badge = 'DONE';
-      title = _dayLog!.workoutName;
+      badge = sessionCount > 1 ? 'DONE · $sessionCount SESSIONS' : 'DONE';
+      title = lastLog!.workoutName;
     } else if (isInProgress) {
       accentColor = const Color(0xFFF39C12);
-      badge = 'IN PROGRESS';
-      title = _dayLog!.workoutName;
+      badge = sessionCount > 1
+          ? 'SESSION $sessionCount · IN PROGRESS'
+          : 'IN PROGRESS';
+      title = activeLog.workoutName;
     } else if (isRest) {
       accentColor = const Color(0xFF3498DB);
       badge = 'REST DAY';
@@ -831,8 +873,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       title = 'No Workout Planned';
     } else {
       accentColor = const Color(0xFFFFD700);
-      final dayLabel = _isToday ? 'TODAY' : DateFormat('EEE').format(_selectedDate).toUpperCase();
-      badge = '$dayLabel · ${(_dayPlan!.workoutName.split(' ').take(2).join(' ')).toUpperCase()}';
+      final dayLabel = _isToday
+          ? 'TODAY'
+          : DateFormat('EEE').format(_selectedDate).toUpperCase();
+      badge =
+          '$dayLabel · ${(_dayPlan!.workoutName.split(' ').take(2).join(' ')).toUpperCase()}';
       title = _dayPlan!.workoutName;
     }
 
@@ -880,57 +925,58 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                             fontWeight: FontWeight.bold,
                             letterSpacing: -0.3),
                       ),
-                      if (!isRest && !noPlan && !isCompleted && !isInProgress)
+                      if (!isRest && !noPlan && !allCompleted && !isInProgress)
                         Padding(
                           padding: const EdgeInsets.only(top: 5),
                           child: Row(
                             children: [
+                              Text('${_dayExercises.length} exercises',
+                                  style: const TextStyle(
+                                      color: Color(0xFF888899), fontSize: 12)),
+                              const Text('  ·  ',
+                                  style: TextStyle(
+                                      color: Color(0xFF444466), fontSize: 12)),
                               Text(
-                                '${_dayExercises.length} exercises',
-                                style: const TextStyle(
-                                    color: Color(0xFF888899), fontSize: 12),
-                              ),
-                              const Text(
-                                '  ·  ',
-                                style: TextStyle(
-                                    color: Color(0xFF444466), fontSize: 12),
-                              ),
-                              Text(
-                                '~${(_dayExercises.length * 7).clamp(20, 120)} min',
-                                style: const TextStyle(
-                                    color: Color(0xFF888899), fontSize: 12),
-                              ),
+                                  '~${(_dayExercises.length * 7).clamp(20, 120)} min',
+                                  style: const TextStyle(
+                                      color: Color(0xFF888899), fontSize: 12)),
                             ],
                           ),
                         ),
-                      if (isCompleted)
+                      if (allCompleted && sessionCount == 1)
                         Padding(
                           padding: const EdgeInsets.only(top: 5),
                           child: Row(
                             children: [
-                              Text(
-                                '${_dayLog!.exercises.length} exercises',
-                                style: const TextStyle(
-                                    color: Color(0xFF888899), fontSize: 12),
-                              ),
+                              Text('${lastLog!.exercises.length} exercises',
+                                  style: const TextStyle(
+                                      color: Color(0xFF888899), fontSize: 12)),
+                              const Text('  ·  ',
+                                  style: TextStyle(
+                                      color: Color(0xFF444466), fontSize: 12)),
+                              Text('${lastLog.totalSets} sets',
+                                  style: const TextStyle(
+                                      color: Color(0xFF888899), fontSize: 12)),
                               const Text('  ·  ',
                                   style: TextStyle(
                                       color: Color(0xFF444466), fontSize: 12)),
                               Text(
-                                '${_dayLog!.totalSets} sets',
-                                style: const TextStyle(
-                                    color: Color(0xFF888899), fontSize: 12),
-                              ),
-                              const Text('  ·  ',
-                                  style: TextStyle(
-                                      color: Color(0xFF444466), fontSize: 12)),
-                              Text(
-                                '${_dayLog!.totalVolume.toStringAsFixed(0)} kg',
-                                style: const TextStyle(
-                                    color: Color(0xFFFFD700), fontSize: 12,
-                                    fontWeight: FontWeight.w600),
-                              ),
+                                  '${lastLog.totalVolume.toStringAsFixed(0)} kg',
+                                  style: const TextStyle(
+                                      color: Color(0xFFFFD700),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600)),
                             ],
+                          ),
+                        ),
+                      if (allCompleted && sessionCount > 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 5),
+                          child: Text(
+                            '${_dayLogs.fold(0, (s, l) => s + l.totalSets)} sets  ·  '
+                            '${_dayLogs.fold(0.0, (s, l) => s + l.totalVolume).toStringAsFixed(0)} kg total',
+                            style: const TextStyle(
+                                color: Color(0xFF888899), fontSize: 12),
                           ),
                         ),
                     ],
@@ -939,26 +985,26 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 const SizedBox(width: 10),
                 Column(
                   children: [
-                    if (!isRest && !noPlan && !isCompleted && !isInProgress)
+                    if (!isRest && !noPlan && !allCompleted && !isInProgress)
                       _PillButton(
                         label: _isFuture ? 'Plan' : 'Start',
                         icon: Icons.play_arrow_rounded,
                         color: accentColor,
                         onTap: _logWorkout,
                       ),
-                    if (isCompleted)
+                    if (allCompleted)
                       _PillButton(
                         label: 'View',
                         icon: Icons.visibility_outlined,
                         color: accentColor,
-                        onTap: _openLog,
+                        onTap: () => _openLog(lastLog),
                       ),
                     if (isInProgress)
                       _PillButton(
                         label: 'Resume',
                         icon: Icons.play_arrow_rounded,
                         color: accentColor,
-                        onTap: _openLog,
+                        onTap: () => _openLog(activeLog),
                       ),
                     if (isRest || noPlan)
                       _PillButton(
@@ -974,6 +1020,16 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                           _load();
                         },
                       ),
+                    // Add Session: visible when all done, not a future date
+                    if (allCompleted && !_isFuture) ...[
+                      const SizedBox(height: 6),
+                      _PillButton(
+                        label: '+ Session',
+                        icon: Icons.add_rounded,
+                        color: const Color(0xFF3498DB),
+                        onTap: _addSession,
+                      ),
+                    ],
                     const SizedBox(height: 6),
                     GestureDetector(
                       onTap: _showDayOptions,
@@ -983,8 +1039,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                         decoration: BoxDecoration(
                           color: const Color(0xFF1A1A2E),
                           borderRadius: BorderRadius.circular(10),
-                          border:
-                              Border.all(color: const Color(0xFF2A2A45)),
+                          border: Border.all(color: const Color(0xFF2A2A45)),
                         ),
                         child: const Icon(Icons.more_horiz_rounded,
                             color: Colors.white38, size: 18),
@@ -996,8 +1051,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             ),
           ),
 
-          // Exercise list (planned workout only)
-          if (!isRest && !noPlan && !isCompleted && !isInProgress &&
+          // Session list (shown when multiple sessions exist)
+          if (sessionCount > 1) _buildSessionList(),
+
+          // Exercise list (planned workout, not started)
+          if (!isRest && !noPlan && !allCompleted && !isInProgress &&
               _dayExercises.isNotEmpty) ...[
             const SizedBox(height: 14),
             const Padding(
@@ -1011,59 +1069,46 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   ..._dayExercises.take(4).toList().asMap().entries.map((e) {
                     final i = e.key;
                     final ex = e.value;
-                    return Padding(
-                      padding: EdgeInsets.only(
-                          bottom: i < (_dayExercises.length.clamp(1, 4) - 1)
-                              ? 0
-                              : 0),
-                      child: Column(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 7),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 22,
-                                  height: 22,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF1E1E35),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      '${i + 1}',
+                    return Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 22,
+                                height: 22,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1E1E35),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Center(
+                                  child: Text('${i + 1}',
                                       style: const TextStyle(
                                           color: Color(0xFF555577),
                                           fontSize: 10,
-                                          fontWeight: FontWeight.bold),
-                                    ),
-                                  ),
+                                          fontWeight: FontWeight.bold)),
                                 ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    ex.name,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(ex.name,
                                     style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 13,
-                                        fontWeight: FontWeight.w500),
-                                  ),
-                                ),
-                                Text(
-                                  ex.muscleGroup,
+                                        fontWeight: FontWeight.w500)),
+                              ),
+                              Text(ex.muscleGroup,
                                   style: const TextStyle(
                                       color: Color(0xFF444466),
                                       fontSize: 11,
-                                      fontWeight: FontWeight.w600),
-                                ),
-                              ],
-                            ),
+                                      fontWeight: FontWeight.w600)),
+                            ],
                           ),
-                          if (i < (_dayExercises.take(4).length - 1))
-                            const Divider(
-                                color: Color(0xFF1A1A2E), height: 1),
-                        ],
-                      ),
+                        ),
+                        if (i < (_dayExercises.take(4).length - 1))
+                          const Divider(color: Color(0xFF1A1A2E), height: 1),
+                      ],
                     );
                   }),
                   if (_dayExercises.length > 4)
@@ -1082,7 +1127,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             ),
           ],
 
-          // Rest day actions
+          // Rest day text
           if (isRest) ...[
             const SizedBox(height: 12),
             Padding(
@@ -1100,12 +1145,87 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     );
   }
 
+  Widget _buildSessionList() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: Column(
+        children: [
+          const Divider(color: Color(0xFF1E1E35), height: 1),
+          const SizedBox(height: 8),
+          ..._dayLogs.asMap().entries.map((e) {
+            final idx = e.key;
+            final log = e.value;
+            final isActive = !log.completed;
+            final dur = log.durationSeconds;
+            final durStr = dur != null ? '${dur ~/ 60}m' : '';
+            return GestureDetector(
+              onTap: () => _openLog(log),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: isActive
+                      ? const Color(0xFFF39C12).withValues(alpha: 0.07)
+                      : const Color(0xFF0D0D1A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isActive
+                        ? const Color(0xFFF39C12).withValues(alpha: 0.3)
+                        : const Color(0xFF1E1E35),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      'Session ${idx + 1}',
+                      style: const TextStyle(
+                          color: Color(0xFF555577),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        log.workoutName,
+                        style: const TextStyle(
+                            color: Color(0xFFCCCCDD),
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (durStr.isNotEmpty) ...[
+                      Text(durStr,
+                          style: const TextStyle(
+                              color: Color(0xFF555577), fontSize: 11)),
+                      const SizedBox(width: 6),
+                    ],
+                    Icon(
+                      isActive
+                          ? Icons.radio_button_checked
+                          : Icons.check_circle_rounded,
+                      color: isActive
+                          ? const Color(0xFFF39C12)
+                          : const Color(0xFF2ECC71),
+                      size: 15,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   // ─── Stats Strip ─────────────────────────────────────────────────────────────
 
   Widget _buildStatsStrip() {
     final isRest = _dayPlan?.isRestDay ?? false;
-    final isCompleted = _dayLog?.completed == true;
-    final isInProgress = _dayLog != null && !isCompleted;
+    final isInProgress = _activeLog != null;
+    final isCompleted = _dayLogs.isNotEmpty && !isInProgress;
 
     String todayStatus;
     Color todayColor;
