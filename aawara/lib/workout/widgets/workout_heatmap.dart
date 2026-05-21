@@ -136,80 +136,85 @@ class _WorkoutHeatmapState extends State<WorkoutHeatmap> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Day-of-week labels column
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    SizedBox(height: 14 + gap),
-                    ...List.generate(7, (i) => Container(
-                      width: 12,
-                      height: cs,
-                      margin: EdgeInsets.only(bottom: i < 6 ? gap : 0),
-                      alignment: Alignment.centerLeft,
-                      child: _dayLabels[i].isNotEmpty
-                          ? Text(_dayLabels[i],
-                              style: const TextStyle(
-                                  color: Color(0xFF444466), fontSize: 8))
-                          : null,
-                    )),
-                  ],
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Fixed day-of-week labels
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                SizedBox(height: 14 + gap),
+                ...List.generate(7, (i) => Container(
+                  width: 12,
+                  height: cs,
+                  margin: EdgeInsets.only(bottom: i < 6 ? gap : 0),
+                  alignment: Alignment.centerLeft,
+                  child: _dayLabels[i].isNotEmpty
+                      ? Text(_dayLabels[i],
+                          style: const TextStyle(
+                              color: Color(0xFF444466), fontSize: 8))
+                      : null,
+                )),
+              ],
+            ),
+            const SizedBox(width: 4),
+            // Scrollable week grid
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: weekMondays.asMap().entries.map((entry) {
+                    final colIdx = entry.key;
+                    final mon = entry.value;
+                    return Padding(
+                      padding: EdgeInsets.only(right: gap),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            height: 14,
+                            child: monthLabelByCol.containsKey(colIdx)
+                                ? Text(monthLabelByCol[colIdx]!,
+                                    style: const TextStyle(
+                                        color: Color(0xFF555577),
+                                        fontSize: 9))
+                                : null,
+                          ),
+                          SizedBox(height: gap),
+                          ...List.generate(7, (d) {
+                            final day = mon.add(Duration(days: d));
+                            final dateStr = _fmt(day);
+                            final inRange =
+                                dateStr >= fromStr && dateStr <= todayStr;
+                            final count =
+                                inRange ? (_counts[dateStr] ?? 0) : -1;
+                            return GestureDetector(
+                              onTap: count > 0
+                                  ? () => _onTapCell(dateStr)
+                                  : null,
+                              child: Container(
+                                width: cs,
+                                height: cs,
+                                margin: EdgeInsets.only(
+                                    bottom: d < 6 ? gap : 0),
+                                decoration: BoxDecoration(
+                                  color: count < 0
+                                      ? Colors.transparent
+                                      : _cellColor(count),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    );
+                  }).toList(),
                 ),
               ),
-              // Week columns
-              ...weekMondays.asMap().entries.map((entry) {
-                final colIdx = entry.key;
-                final mon = entry.value;
-                return Padding(
-                  padding: EdgeInsets.only(right: gap),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        height: 14,
-                        child: monthLabelByCol.containsKey(colIdx)
-                            ? Text(monthLabelByCol[colIdx]!,
-                                style: const TextStyle(
-                                    color: Color(0xFF555577), fontSize: 9))
-                            : null,
-                      ),
-                      SizedBox(height: gap),
-                      ...List.generate(7, (d) {
-                        final day = mon.add(Duration(days: d));
-                        final dateStr = _fmt(day);
-                        final inRange =
-                            dateStr >= fromStr && dateStr <= todayStr;
-                        final count =
-                            inRange ? (_counts[dateStr] ?? 0) : -1;
-                        return GestureDetector(
-                          onTap:
-                              count > 0 ? () => _onTapCell(dateStr) : null,
-                          child: Container(
-                            width: cs,
-                            height: cs,
-                            margin:
-                                EdgeInsets.only(bottom: d < 6 ? gap : 0),
-                            decoration: BoxDecoration(
-                              color: count < 0
-                                  ? Colors.transparent
-                                  : _cellColor(count),
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
-                  ),
-                );
-              }),
-            ],
-          ),
+            ),
+          ],
         ),
         const SizedBox(height: 6),
         Row(
