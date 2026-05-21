@@ -3,7 +3,6 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
-import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import 'workout_logging_screen.dart';
 import 'exercise_library_screen.dart';
@@ -818,8 +817,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Column(
-                  children: [
+                SizedBox(
+                  width: 108,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
                     if (isInProgress)
                       _PillButton(
                         label: 'Resume',
@@ -829,7 +831,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                       )
                     else if (!_isFuture)
                       _PillButton(
-                        label: allCompleted ? '+ Session' : 'Start',
+                        label: allCompleted ? 'Session' : 'Start',
                         icon: allCompleted
                             ? Icons.add_rounded
                             : Icons.play_arrow_rounded,
@@ -851,7 +853,6 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                     GestureDetector(
                       onTap: _showDayOptions,
                       child: Container(
-                        width: 36,
                         height: 36,
                         decoration: BoxDecoration(
                           color: const Color(0xFF1A1A2E),
@@ -863,6 +864,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                       ),
                     ),
                   ],
+                  ),
                 ),
               ],
             ),
@@ -1483,13 +1485,12 @@ class _PillButton extends StatelessWidget {
         onTap: onTap,
         child: Container(
           height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
             color: color,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon, color: Colors.black, size: 16),
               const SizedBox(width: 4),
