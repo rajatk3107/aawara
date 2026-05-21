@@ -26,7 +26,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 11,
+      version: 12,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -43,6 +43,7 @@ class WorkoutDatabase {
     if (oldVersion < 9) await _migrateV9(db);
     if (oldVersion < 10) await _migrateV10(db);
     if (oldVersion < 11) await _migrateV11(db);
+    if (oldVersion < 12) await _migrateV12(db);
   }
 
   Future<void> _migrateV11(Database db) async {
@@ -53,6 +54,29 @@ class WorkoutDatabase {
         file_path TEXT NOT NULL,
         note TEXT,
         created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+  }
+
+  Future<void> _migrateV12(Database db) async {
+    await db.execute('ALTER TABLE foods ADD COLUMN barcode TEXT');
+    await db.execute('ALTER TABLE foods ADD COLUMN brand TEXT');
+    await db.execute('ALTER TABLE foods ADD COLUMN sugar_g REAL DEFAULT 0');
+    await db.execute('ALTER TABLE foods ADD COLUMN sodium_mg REAL DEFAULT 0');
+    await db.execute("ALTER TABLE foods ADD COLUMN source TEXT DEFAULT 'manual'");
+    await db.execute('ALTER TABLE foods ADD COLUMN last_updated TEXT');
+    await db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_barcode
+      ON foods(barcode) WHERE barcode IS NOT NULL
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS scan_cache (
+        barcode TEXT PRIMARY KEY,
+        food_id TEXT,
+        status TEXT NOT NULL DEFAULT 'found',
+        scan_count INTEGER NOT NULL DEFAULT 1,
+        last_scanned_at TEXT NOT NULL,
+        raw_json TEXT
       )
     ''');
   }
@@ -359,7 +383,29 @@ class WorkoutDatabase {
         fiber_g REAL,
         serving_size REAL NOT NULL DEFAULT 100,
         serving_unit TEXT NOT NULL DEFAULT 'g',
-        is_custom INTEGER NOT NULL DEFAULT 0
+        is_custom INTEGER NOT NULL DEFAULT 0,
+        barcode TEXT,
+        brand TEXT,
+        sugar_g REAL DEFAULT 0,
+        sodium_mg REAL DEFAULT 0,
+        source TEXT DEFAULT 'manual',
+        last_updated TEXT
+      )
+    ''');
+
+    await db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_barcode
+      ON foods(barcode) WHERE barcode IS NOT NULL
+    ''');
+
+    await db.execute('''
+      CREATE TABLE scan_cache (
+        barcode TEXT PRIMARY KEY,
+        food_id TEXT,
+        status TEXT NOT NULL DEFAULT 'found',
+        scan_count INTEGER NOT NULL DEFAULT 1,
+        last_scanned_at TEXT NOT NULL,
+        raw_json TEXT
       )
     ''');
 
@@ -3115,6 +3161,60 @@ class WorkoutDatabase {
     );
     if (rows.isEmpty) return null;
     return Food.fromMap(rows.first);
+  }
+
+  Future<Food?> getFoodById(String id) async {
+    final db = await database;
+    final rows = await db.query('foods', where: 'id = ?', whereArgs: [id], limit: 1);
+    if (rows.isEmpty) return null;
+    return Food.fromMap(rows.first);
+  }
+
+  Future<Food?> getFoodByBarcode(String barcode) async {
+    final db = await database;
+    final rows = await db.query('foods', where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+    if (rows.isEmpty) return null;
+    return Food.fromMap(rows.first);
+  }
+
+  Future<Food> upsertFoodFromApi(Food food) async {
+    final db = await database;
+    if (food.barcode != null) {
+      final existing = await getFoodByBarcode(food.barcode!);
+      if (existing != null) {
+        final updated = food.copyWith(id: existing.id);
+        await db.update('foods', updated.toMap(), where: 'id = ?', whereArgs: [existing.id]);
+        return updated;
+      }
+    }
+    await db.insert('foods', food.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    return food;
+  }
+
+  Future<ScanCacheEntry?> getScanCache(String barcode) async {
+    final db = await database;
+    final rows = await db.query('scan_cache', where: 'barcode = ?', whereArgs: [barcode], limit: 1);
+    if (rows.isEmpty) return null;
+    return ScanCacheEntry.fromMap(rows.first);
+  }
+
+  Future<void> upsertScanCache(ScanCacheEntry entry) async {
+    final db = await database;
+    await db.insert('scan_cache', entry.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> incrementScanCount(String barcode) async {
+    final db = await database;
+    await db.execute(
+      'UPDATE scan_cache SET scan_count = scan_count + 1, last_scanned_at = ? WHERE barcode = ?',
+      [DateTime.now().toIso8601String(), barcode],
+    );
+  }
+
+  Future<List<String>> getFailedBarcodes() async {
+    final db = await database;
+    final rows = await db.query('scan_cache', columns: ['barcode'], where: "status != 'found'");
+    return rows.map((r) => r['barcode'] as String).toList();
   }
 
   // ── Water Logs ────────────────────────────────────────────────────────────────

@@ -9,6 +9,12 @@ class Food {
   final double servingSize;
   final String servingUnit;
   final bool isCustom;
+  final String? barcode;
+  final String? brand;
+  final double? sugarG;
+  final double? sodiumMg;
+  final String? source;
+  final String? lastUpdated;
 
   const Food({
     required this.id,
@@ -21,6 +27,12 @@ class Food {
     required this.servingSize,
     required this.servingUnit,
     required this.isCustom,
+    this.barcode,
+    this.brand,
+    this.sugarG,
+    this.sodiumMg,
+    this.source,
+    this.lastUpdated,
   });
 
   factory Food.fromMap(Map<String, dynamic> m) => Food(
@@ -34,6 +46,12 @@ class Food {
         servingSize: (m['serving_size'] as num).toDouble(),
         servingUnit: m['serving_unit'] as String,
         isCustom: (m['is_custom'] as int) == 1,
+        barcode: m['barcode'] as String?,
+        brand: m['brand'] as String?,
+        sugarG: (m['sugar_g'] as num?)?.toDouble(),
+        sodiumMg: (m['sodium_mg'] as num?)?.toDouble(),
+        source: m['source'] as String?,
+        lastUpdated: m['last_updated'] as String?,
       );
 
   Map<String, dynamic> toMap() => {
@@ -47,7 +65,106 @@ class Food {
         'serving_size': servingSize,
         'serving_unit': servingUnit,
         'is_custom': isCustom ? 1 : 0,
+        'barcode': barcode,
+        'brand': brand,
+        'sugar_g': sugarG,
+        'sodium_mg': sodiumMg,
+        'source': source,
+        'last_updated': lastUpdated,
       };
+
+  Food copyWith({
+    String? id,
+    String? name,
+    double? calories,
+    double? proteinG,
+    double? carbsG,
+    double? fatG,
+    double? fiberG,
+    double? servingSize,
+    String? servingUnit,
+    bool? isCustom,
+    String? barcode,
+    String? brand,
+    double? sugarG,
+    double? sodiumMg,
+    String? source,
+    String? lastUpdated,
+  }) =>
+      Food(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        calories: calories ?? this.calories,
+        proteinG: proteinG ?? this.proteinG,
+        carbsG: carbsG ?? this.carbsG,
+        fatG: fatG ?? this.fatG,
+        fiberG: fiberG ?? this.fiberG,
+        servingSize: servingSize ?? this.servingSize,
+        servingUnit: servingUnit ?? this.servingUnit,
+        isCustom: isCustom ?? this.isCustom,
+        barcode: barcode ?? this.barcode,
+        brand: brand ?? this.brand,
+        sugarG: sugarG ?? this.sugarG,
+        sodiumMg: sodiumMg ?? this.sodiumMg,
+        source: source ?? this.source,
+        lastUpdated: lastUpdated ?? this.lastUpdated,
+      );
+}
+
+class ScanCacheEntry {
+  final String barcode;
+  final String? foodId;
+  final String status;
+  final int scanCount;
+  final String lastScannedAt;
+  final String? rawJson;
+
+  const ScanCacheEntry({
+    required this.barcode,
+    this.foodId,
+    required this.status,
+    this.scanCount = 1,
+    required this.lastScannedAt,
+    this.rawJson,
+  });
+
+  factory ScanCacheEntry.fromMap(Map<String, dynamic> m) => ScanCacheEntry(
+        barcode: m['barcode'] as String,
+        foodId: m['food_id'] as String?,
+        status: m['status'] as String,
+        scanCount: m['scan_count'] as int,
+        lastScannedAt: m['last_scanned_at'] as String,
+        rawJson: m['raw_json'] as String?,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'barcode': barcode,
+        'food_id': foodId,
+        'status': status,
+        'scan_count': scanCount,
+        'last_scanned_at': lastScannedAt,
+        'raw_json': rawJson,
+      };
+}
+
+sealed class BarcodeScanResult {
+  const BarcodeScanResult();
+}
+
+class BarcodeFound extends BarcodeScanResult {
+  final Food food;
+  final bool isFromLocal;
+  const BarcodeFound(this.food, {required this.isFromLocal});
+}
+
+class BarcodeNotFound extends BarcodeScanResult {
+  final String barcode;
+  const BarcodeNotFound(this.barcode);
+}
+
+class BarcodeLookupError extends BarcodeScanResult {
+  final String message;
+  const BarcodeLookupError(this.message);
 }
 
 class NutritionGoals {

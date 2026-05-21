@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:uuid/uuid.dart';
 import '../models/nutrition_models.dart';
+import '../services/barcode_nutrition_service.dart';
+import '../widgets/manual_nutrition_form.dart';
 import '../../workout/database/workout_database.dart';
 
 class BarcodeScannerScreen extends StatefulWidget {
@@ -22,6 +21,8 @@ class BarcodeScannerScreen extends StatefulWidget {
 
 class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
   final _controller = MobileScannerController();
+  final _service = BarcodeNutritionService.instance;
+
   bool _scanning = true;
   bool _loading = false;
   String? _error;
@@ -34,8 +35,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
 
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (!_scanning || _loading) return;
-    final barcode = capture.barcodes.firstOrNull;
-    if (barcode?.rawValue == null) return;
+    final raw = capture.barcodes.firstOrNull?.rawValue;
+    if (raw == null) return;
 
     setState(() {
       _scanning = false;
@@ -43,80 +44,30 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       _error = null;
     });
 
-    final code = barcode!.rawValue!;
-    try {
-      final food = await _lookupBarcode(code);
-      if (!mounted) return;
-      if (food != null) {
-        _showFoundSheet(food);
-      } else {
-        setState(() {
-          _error = 'Product not found for barcode $code.\nTry another product or create it manually.';
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _error = 'Network error. Check your connection and try again.';
-          _loading = false;
-        });
-      }
+    final result = await _service.lookup(raw);
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+
+    switch (result) {
+      case BarcodeFound(:final food, :final isFromLocal):
+        _showFoundSheet(food, isFromLocal: isFromLocal);
+      case BarcodeNotFound(:final barcode):
+        _showNotFoundSheet(barcode);
+      case BarcodeLookupError(:final message):
+        setState(() => _error = message);
     }
   }
 
-  Future<Food?> _lookupBarcode(String barcode) async {
-    final url = Uri.parse(
-        'https://world.openfoodfacts.org/api/v0/product/$barcode.json');
-    final resp = await http
-        .get(url, headers: {'User-Agent': 'Aawara-FitnessApp/1.0'}).timeout(
-      const Duration(seconds: 12),
-    );
-    if (resp.statusCode != 200) return null;
-
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (data['status'] != 1) return null;
-
-    final product = data['product'] as Map<String, dynamic>;
-    final nutriments =
-        (product['nutriments'] as Map<String, dynamic>?) ?? {};
-
-    final name = ((product['product_name'] as String?) ??
-            (product['product_name_en'] as String?) ??
-            '')
-        .trim();
-    if (name.isEmpty) return null;
-
-    double cal = _nutrient(nutriments, 'energy-kcal_100g') ??
-        ((_nutrient(nutriments, 'energy_100g') ?? 0) / 4.184);
-    final protein = _nutrient(nutriments, 'proteins_100g') ?? 0;
-    final carbs = _nutrient(nutriments, 'carbohydrates_100g') ?? 0;
-    final fat = _nutrient(nutriments, 'fat_100g') ?? 0;
-    final fiber = _nutrient(nutriments, 'fiber_100g');
-
-    return Food(
-      id: const Uuid().v4(),
-      name: name,
-      calories: cal,
-      proteinG: protein,
-      carbsG: carbs,
-      fatG: fat,
-      fiberG: fiber,
-      servingSize: 100,
-      servingUnit: 'g',
-      isCustom: true,
-    );
+  void _resetScanner() {
+    setState(() {
+      _scanning = true;
+      _loading = false;
+      _error = null;
+    });
   }
 
-  double? _nutrient(Map<String, dynamic> n, String key) {
-    final v = n[key];
-    if (v == null) return null;
-    if (v is num) return v.toDouble();
-    return double.tryParse(v.toString());
-  }
-
-  void _showFoundSheet(Food food) {
-    setState(() => _loading = false);
+  void _showFoundSheet(Food food, {required bool isFromLocal}) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A2E),
@@ -126,17 +77,46 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       isDismissible: false,
       builder: (_) => _FoundSheet(
         food: food,
+        isFromLocal: isFromLocal,
         date: widget.date,
         meal: widget.meal,
         onAdded: () => Navigator.pop(context, true),
         onRescan: () {
-          setState(() {
-            _scanning = true;
-            _loading = false;
-          });
+          Navigator.pop(context); // close sheet
+          _resetScanner();
         },
       ),
-    );
+    ).then((_) {
+      if (mounted && _scanning == false && _loading == false && _error == null) {
+        _resetScanner();
+      }
+    });
+  }
+
+  void _showNotFoundSheet(String barcode) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      isDismissible: false,
+      builder: (_) => _NotFoundSheet(
+        barcode: barcode,
+        date: widget.date,
+        meal: widget.meal,
+        onAdded: () => Navigator.pop(context, true),
+        onRescan: () {
+          Navigator.pop(context);
+          _resetScanner();
+        },
+      ),
+    ).then((_) {
+      if (mounted && _scanning == false && _loading == false && _error == null) {
+        _resetScanner();
+      }
+    });
   }
 
   @override
@@ -145,10 +125,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          MobileScanner(
-            controller: _controller,
-            onDetect: _onDetect,
-          ),
+          MobileScanner(controller: _controller, onDetect: _onDetect),
           _ScanOverlay(),
           // Top bar
           SafeArea(
@@ -170,15 +147,14 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                             fontWeight: FontWeight.w600)),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.flash_on_rounded,
-                        color: Colors.white),
+                    icon: const Icon(Icons.flash_on_rounded, color: Colors.white),
                     onPressed: () => _controller.toggleTorch(),
                   ),
                 ],
               ),
             ),
           ),
-          // Loading
+          // Loading overlay
           if (_loading)
             Container(
               color: Colors.black54,
@@ -195,7 +171,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 ),
               ),
             ),
-          // Error
+          // Error card
           if (_error != null)
             Positioned(
               bottom: 80,
@@ -211,7 +187,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.qr_code_scanner_rounded,
+                    const Icon(Icons.wifi_off_rounded,
                         color: Color(0xFF555577), size: 32),
                     const SizedBox(height: 10),
                     Text(_error!,
@@ -223,10 +199,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         TextButton(
-                          onPressed: () => setState(() {
-                            _error = null;
-                            _scanning = true;
-                          }),
+                          onPressed: _resetScanner,
                           child: const Text('Try Again',
                               style: TextStyle(color: Color(0xFFFFD700))),
                         ),
@@ -257,6 +230,8 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     );
   }
 }
+
+// ── Scan overlay ──────────────────────────────────────────────────────────────
 
 class _ScanOverlay extends StatelessWidget {
   @override
@@ -338,9 +313,7 @@ class _Corner extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: len,
         height: len,
-        child: CustomPaint(
-          painter: _CornerPainter(thickness, left, top),
-        ),
+        child: CustomPaint(painter: _CornerPainter(thickness, left, top)),
       );
 }
 
@@ -368,10 +341,11 @@ class _CornerPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter old) => false;
 }
 
-// ── Found sheet ────────────────────────────────────────────────────────────────
+// ── Found sheet ───────────────────────────────────────────────────────────────
 
 class _FoundSheet extends StatefulWidget {
   final Food food;
+  final bool isFromLocal;
   final String date;
   final String meal;
   final VoidCallback onAdded;
@@ -379,6 +353,7 @@ class _FoundSheet extends StatefulWidget {
 
   const _FoundSheet({
     required this.food,
+    required this.isFromLocal,
     required this.date,
     required this.meal,
     required this.onAdded,
@@ -394,19 +369,15 @@ class _FoundSheetState extends State<_FoundSheet> {
 
   Future<void> _addToLog() async {
     setState(() => _saving = true);
-    final db = WorkoutDatabase.instance;
-
-    // Reuse existing food if it's already in the DB, otherwise create it.
-    Food? existing = await db.getFoodByExactName(widget.food.name);
-    existing ??= await db.createCustomFood(widget.food);
-
-    await db.addNutritionEntry(widget.date, existing.id, widget.meal, 1.0);
+    await WorkoutDatabase.instance
+        .addNutritionEntry(widget.date, widget.food.id, widget.meal, 1.0);
     if (mounted) widget.onAdded();
   }
 
   @override
   Widget build(BuildContext context) {
     final f = widget.food;
+    final isOff = f.source == 'off';
     return Padding(
       padding: EdgeInsets.fromLTRB(
           20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 36),
@@ -414,28 +385,40 @@ class _FoundSheetState extends State<_FoundSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Status row
           Row(
             children: [
               const Icon(Icons.check_circle_rounded,
                   color: Color(0xFF2ECC71), size: 18),
               const SizedBox(width: 6),
-              const Text('Product Found',
-                  style: TextStyle(
-                      color: Color(0xFF2ECC71),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
+              Text(
+                widget.isFromLocal ? 'Found in your library' : 'Product Found',
+                style: const TextStyle(
+                    color: Color(0xFF2ECC71),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600),
+              ),
             ],
           ),
           const SizedBox(height: 10),
+          // Product name
           Text(f.name,
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
                   fontWeight: FontWeight.bold)),
+          if (f.brand != null && f.brand!.isNotEmpty) ...[
+            const SizedBox(height: 2),
+            Text(f.brand!,
+                style: const TextStyle(
+                    color: Color(0xFF888899), fontSize: 13)),
+          ],
           const SizedBox(height: 2),
-          const Text('per 100g',
-              style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
-          const SizedBox(height: 16),
+          Text('per ${f.servingSize.round()}${f.servingUnit}',
+              style:
+                  const TextStyle(color: Color(0xFF555577), fontSize: 12)),
+          const SizedBox(height: 14),
+          // Main macros
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -449,14 +432,55 @@ class _FoundSheetState extends State<_FoundSheet> {
                 _macro('Calories', '${f.calories.round()}',
                     const Color(0xFFFFD700)),
                 _macro('Protein', '${f.proteinG.toStringAsFixed(1)}g',
-                    const Color(0xFF3498DB)),
+                    const Color(0xFF5DCAA5)),
                 _macro('Carbs', '${f.carbsG.toStringAsFixed(1)}g',
-                    const Color(0xFF2ECC71)),
+                    const Color(0xFFEF9F27)),
                 _macro('Fat', '${f.fatG.toStringAsFixed(1)}g',
-                    const Color(0xFFE67E22)),
+                    const Color(0xFFF0997B)),
               ],
             ),
           ),
+          // Extended detail for OFF-sourced foods (Step 8)
+          if (isOff && (f.sugarG != null || f.sodiumMg != null || f.fiberG != null)) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D1A),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  if (f.fiberG != null)
+                    _miniMacro('Fiber', '${f.fiberG!.toStringAsFixed(1)}g'),
+                  if (f.sugarG != null) ...[
+                    if (f.fiberG != null) _dot(),
+                    _miniMacro('Sugar', '${f.sugarG!.toStringAsFixed(1)}g'),
+                  ],
+                  if (f.sodiumMg != null) ...[
+                    if (f.fiberG != null || f.sugarG != null) _dot(),
+                    _miniMacro('Sodium',
+                        '${f.sodiumMg!.round()}mg'),
+                  ],
+                ],
+              ),
+            ),
+          ],
+          // OFF attribution (mandatory when showing OFF data)
+          if (isOff) ...[
+            const SizedBox(height: 6),
+            const Row(
+              children: [
+                Icon(Icons.info_outline_rounded,
+                    color: Color(0xFF444466), size: 12),
+                SizedBox(width: 4),
+                Text('via Open Food Facts',
+                    style: TextStyle(
+                        color: Color(0xFF444466), fontSize: 11)),
+              ],
+            ),
+          ],
           const SizedBox(height: 16),
           Row(
             children: [
@@ -496,7 +520,8 @@ class _FoundSheetState extends State<_FoundSheet> {
                           child: CircularProgressIndicator(
                               strokeWidth: 2, color: Colors.black))
                       : Text('Add to ${widget.meal}',
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold)),
                 ),
               ),
             ],
@@ -519,4 +544,81 @@ class _FoundSheetState extends State<_FoundSheet> {
                   color: Color(0xFF555577), fontSize: 11)),
         ],
       );
+
+  Widget _miniMacro(String label, String value) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  color: Color(0xFF555577), fontSize: 11)),
+          const SizedBox(width: 3),
+          Text(value,
+              style: const TextStyle(
+                  color: Color(0xFF888899),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+        ],
+      );
+
+  Widget _dot() => const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 8),
+        child: Text('·',
+            style: TextStyle(color: Color(0xFF333355), fontSize: 11)),
+      );
+}
+
+// ── Not-found sheet ───────────────────────────────────────────────────────────
+
+class _NotFoundSheet extends StatelessWidget {
+  final String barcode;
+  final String date;
+  final String meal;
+  final VoidCallback onAdded;
+  final VoidCallback onRescan;
+
+  const _NotFoundSheet({
+    required this.barcode,
+    required this.date,
+    required this.meal,
+    required this.onAdded,
+    required this.onRescan,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final kb = MediaQuery.of(context).viewInsets.bottom;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, kb + 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.search_off_rounded,
+                  color: Color(0xFFE67E22), size: 18),
+              const SizedBox(width: 6),
+              const Text('Product Not Found',
+                  style: TextStyle(
+                      color: Color(0xFFE67E22),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Barcode $barcode wasn\'t found on Open Food Facts.\nEnter the nutrition info below to log it.',
+            style: const TextStyle(color: Color(0xFF888899), fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          ManualNutritionForm(
+            barcode: barcode,
+            date: date,
+            meal: meal,
+            onAdded: onAdded,
+            onRescan: onRescan,
+          ),
+        ],
+      ),
+    );
+  }
 }
