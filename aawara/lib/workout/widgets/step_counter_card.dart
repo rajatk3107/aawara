@@ -44,10 +44,12 @@ class _StepCounterCardState extends State<StepCounterCard> {
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
     final steps = await StepTrackingService.getTodaySteps();
+    final manualSteps = await StepTrackingService.getManualStepsAdded();
     if (!mounted) return;
     setState(() {
       _goal = goal;
       _steps = steps;
+      _manualSteps = manualSteps;
     });
 
     _sub = StepTrackingService.stepStream.listen((update) {
@@ -94,18 +96,97 @@ class _StepCounterCardState extends State<StepCounterCard> {
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
-    // Ask the service to push a fresh update via the stream
     await StepTrackingService.refreshStream();
-    // Also read directly so the card updates even when the service stream is idle
     final steps = await StepTrackingService.getTodaySteps();
+    final manual = await StepTrackingService.getManualStepsAdded();
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
     if (mounted) {
       setState(() {
         _steps = steps;
         _goal = goal;
+        _manualSteps = manual;
         _refreshing = false;
       });
+    }
+  }
+
+  Future<void> _addStepsManually() async {
+    final ctrl = TextEditingController();
+    final added = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Add Steps',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Steps walked without your phone',
+              style: TextStyle(color: Color(0xFF888899), fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                hintText: '0',
+                hintStyle: TextStyle(color: Color(0xFF444466)),
+              ),
+            ),
+            if (_manualSteps > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Already added today: ${_formatSteps(_manualSteps)} steps',
+                  style: const TextStyle(
+                      color: Color(0xFF555577), fontSize: 12),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = int.tryParse(ctrl.text.trim());
+              Navigator.pop(ctx, v);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFD700),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Add',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (added != null && added > 0) {
+      await StepTrackingService.addManualSteps(added);
+      final steps = await StepTrackingService.getTodaySteps();
+      final manual = await StepTrackingService.getManualStepsAdded();
+      if (mounted) setState(() { _steps = steps; _manualSteps = manual; });
     }
   }
 
@@ -184,6 +265,26 @@ class _StepCounterCardState extends State<StepCounterCard> {
             const Text('Steps',
                 style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
             const Spacer(),
+            GestureDetector(
+              onTap: _addStepsManually,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _manualSteps > 0
+                      ? const Color(0xFFFFD700).withValues(alpha: 0.10)
+                      : const Color(0xFF2A2A45),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.edit_rounded,
+                  color: _manualSteps > 0
+                      ? const Color(0xFFFFD700)
+                      : const Color(0xFFAAAAAA),
+                  size: 15,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
             GestureDetector(
               onTap: _refresh,
               child: Container(
@@ -282,6 +383,14 @@ class _StepCounterCardState extends State<StepCounterCard> {
                     Text('~$cal kcal',
                         style: const TextStyle(
                             color: Color(0xFF555577), fontSize: 12)),
+                    if (_manualSteps > 0) ...[
+                      const Text('  ·  ',
+                          style: TextStyle(
+                              color: Color(0xFF333355), fontSize: 12)),
+                      Text('+${_formatSteps(_manualSteps)} manual',
+                          style: const TextStyle(
+                              color: Color(0xFFFFD700), fontSize: 11)),
+                    ],
                     const Spacer(),
                     GestureDetector(
                       onTap: _changeGoal,
