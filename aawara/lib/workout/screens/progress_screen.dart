@@ -343,14 +343,11 @@ class _ProgressScreenState extends State<ProgressScreen>
       );
     }
     if (_stepHistory.isEmpty) {
-      return const SizedBox(
-        height: 120,
-        child: EmptyStateWidget(
-          icon: Icons.directions_walk_rounded,
-          title: 'No step data yet',
-          subtitle: 'Enable step tracking in Settings to start '
-              'seeing your daily activity here.',
-        ),
+      return const EmptyStateWidget(
+        icon: Icons.directions_walk_rounded,
+        title: 'No step data yet',
+        subtitle: 'Enable step tracking in Settings to start '
+            'seeing your daily activity here.',
       );
     }
 

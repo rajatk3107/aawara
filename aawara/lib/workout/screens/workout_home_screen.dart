@@ -1231,10 +1231,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             child: const Icon(Icons.add_rounded,
                 color: Color(0xFF555577), size: 16),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 6),
           // Energy
           _WellnessLabel('⚡'),
-          const SizedBox(width: 4),
+          const SizedBox(width: 3),
           ...List.generate(5, (i) {
             final sel = _wellnessEnergy == i + 1;
             return GestureDetector(
@@ -1244,13 +1244,13 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 child: Text(
                   energyEmojis[i],
                   style: TextStyle(
-                      fontSize: sel ? 17 : 13,
+                      fontSize: sel ? 16 : 12,
                       color: sel ? null : const Color(0xFF555577)),
                 ),
               ),
             );
           }),
-          const SizedBox(width: 10),
+          const SizedBox(width: 6),
           // Soreness
           _WellnessLabel('🦴'),
           const SizedBox(width: 4),

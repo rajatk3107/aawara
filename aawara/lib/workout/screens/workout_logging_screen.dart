@@ -874,6 +874,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       body: Column(
         children: [
           _buildHeader(),

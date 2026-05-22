@@ -89,13 +89,31 @@ class StepTrackingService {
   }
 
   static Future<int> getTodaySteps() async {
+    final manualAdd = await getManualStepsAdded();
     if (Platform.isIOS) {
-      return _getIosSteps();
+      return await _getIosSteps() + manualAdd;
     }
     // Android — read latest value from DB (background service writes it)
     final today = _todayDate();
     final row = await WorkoutDatabase.instance.getStepLog(today);
-    return row != null ? (row['steps'] as num).toInt() : 0;
+    final automatic = row != null ? (row['steps'] as num).toInt() : 0;
+    return automatic + manualAdd;
+  }
+
+  // Returns the manually added step offset for today.
+  static Future<int> getManualStepsAdded() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt('step_manual_add_${_todayDate()}') ?? 0;
+  }
+
+  // Adds steps the user walked without their phone. Cumulative within a day.
+  static Future<void> addManualSteps(int steps) async {
+    if (steps <= 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'step_manual_add_${_todayDate()}';
+    final existing = prefs.getInt(key) ?? 0;
+    await prefs.setInt(key, existing + steps);
+    await refreshStream();
   }
 
   // Called on every app resume to ensure the Android service is running
@@ -121,13 +139,16 @@ class StepTrackingService {
 
   // ── Android ──────────────────────────────────────────────────────────────
 
-  // Wire up the UI stream listener (synchronous — no async needed).
+  // Wire up the UI stream listener — includes manual offset on top of pedometer count.
   static void _listenToAndroidUpdates() {
-    FlutterBackgroundService().on('stepUpdate').listen((data) {
+    FlutterBackgroundService().on('stepUpdate').listen((data) async {
       if (data == null) return;
+      final automatic = (data['steps'] as num?)?.toInt() ?? 0;
+      final goal = (data['goal'] as num?)?.toInt() ?? 8000;
+      final manualAdd = await getManualStepsAdded();
       _stepController.add(StepUpdate(
-        steps: (data['steps'] as num?)?.toInt() ?? 0,
-        goal: (data['goal'] as num?)?.toInt() ?? 8000,
+        steps: automatic + manualAdd,
+        goal: goal,
       ));
     });
   }

@@ -587,7 +587,7 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
   Widget _buildBottomBar() {
     return Container(
       padding: EdgeInsets.fromLTRB(
-          20, 12, 20, MediaQuery.of(context).padding.bottom + 12),
+          16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,

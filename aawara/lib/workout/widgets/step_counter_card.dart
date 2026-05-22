@@ -18,6 +18,7 @@ class _StepCounterCardState extends State<StepCounterCard> {
   int _goal = 8000;
   bool _goalJustReached = false;
   bool _refreshing = false;
+  int _manualSteps = 0;
   StreamSubscription<StepUpdate>? _sub;
   Timer? _goalBannerTimer;
 
