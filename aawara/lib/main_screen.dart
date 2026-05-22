@@ -33,6 +33,7 @@ class _MainScreenState extends State<MainScreen> {
       ),
       child: Scaffold(
         backgroundColor: const Color(0xFF0D0D1A),
+        resizeToAvoidBottomInset: false,
         body: IndexedStack(index: _tab, children: _screens),
         bottomNavigationBar: Container(
           decoration: const BoxDecoration(

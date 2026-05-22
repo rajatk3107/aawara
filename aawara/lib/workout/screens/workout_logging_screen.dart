@@ -8,6 +8,7 @@ import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
+import '../../utils/safe_navigation.dart';
 import 'workout_complete_screen.dart';
 import 'quick_start_screen.dart';
 
@@ -771,11 +772,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
+          TextButton(onPressed: () => popAfterFocusSettles(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
             onPressed: () {
               final v = double.tryParse(ctrl.text);
-              Navigator.pop(ctx, v);
+              popAfterFocusSettles(ctx, v);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),
@@ -831,12 +832,12 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
+          TextButton(onPressed: () => popAfterFocusSettles(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
             onPressed: () {
               final m = int.tryParse(mmCtrl.text) ?? 0;
               final s = int.tryParse(ssCtrl.text) ?? 0;
-              Navigator.pop(ctx, m * 60 + s);
+              popAfterFocusSettles(ctx, m * 60 + s);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),

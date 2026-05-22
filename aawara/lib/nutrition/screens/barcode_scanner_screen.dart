@@ -4,6 +4,7 @@ import '../models/nutrition_models.dart';
 import '../services/barcode_nutrition_service.dart';
 import '../widgets/manual_nutrition_form.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 
 class BarcodeScannerScreen extends StatefulWidget {
   final String date;
@@ -71,34 +72,40 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
     });
   }
 
+  void _closeResultSheet(BuildContext sheetContext, bool added) {
+    popAfterFocusSettles(sheetContext, added);
+  }
+
+  void _handleResultSheetClosed(bool? added) {
+    if (!mounted) return;
+    if (added == true) {
+      popAfterFocusSettles(context, true);
+    } else if (!_scanning && !_loading && _error == null) {
+      _resetScanner();
+    }
+  }
+
   void _showFoundSheet(Food food, {required bool isFromLocal}) {
-    showModalBottomSheet(
+    showModalBottomSheet<bool>(
       context: context,
       backgroundColor: const Color(0xFF1A1A2E),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       isDismissible: false,
-      builder: (_) => _FoundSheet(
+      builder: (sheetContext) => _FoundSheet(
         food: food,
         isFromLocal: isFromLocal,
         date: widget.date,
         meal: widget.meal,
-        onAdded: () => Navigator.pop(context, true),
-        onRescan: () {
-          Navigator.pop(context); // close sheet
-          _resetScanner();
-        },
+        onAdded: () => _closeResultSheet(sheetContext, true),
+        onRescan: () => _closeResultSheet(sheetContext, false),
       ),
-    ).then((_) {
-      if (mounted && _scanning == false && _loading == false && _error == null) {
-        _resetScanner();
-      }
-    });
+    ).then(_handleResultSheetClosed);
   }
 
   void _showIncompleteSheet(Food partialFood) {
-    showModalBottomSheet(
+    showModalBottomSheet<bool>(
       context: context,
       backgroundColor: const Color(0xFF1A1A2E),
       shape: const RoundedRectangleBorder(
@@ -106,23 +113,18 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       ),
       isScrollControlled: true,
       isDismissible: false,
-      builder: (_) => _IncompleteSheet(
+      builder: (sheetContext) => _IncompleteSheet(
         partialFood: partialFood,
         date: widget.date,
         meal: widget.meal,
-        onAdded: () => Navigator.pop(context, true),
-        onRescan: () {
-          Navigator.pop(context);
-          _resetScanner();
-        },
+        onAdded: () => _closeResultSheet(sheetContext, true),
+        onRescan: () => _closeResultSheet(sheetContext, false),
       ),
-    ).then((_) {
-      if (mounted && !_scanning && !_loading && _error == null) _resetScanner();
-    });
+    ).then(_handleResultSheetClosed);
   }
 
   void _showNotFoundSheet(String barcode) {
-    showModalBottomSheet(
+    showModalBottomSheet<bool>(
       context: context,
       backgroundColor: const Color(0xFF1A1A2E),
       shape: const RoundedRectangleBorder(
@@ -130,21 +132,14 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
       ),
       isScrollControlled: true,
       isDismissible: false,
-      builder: (_) => _NotFoundSheet(
+      builder: (sheetContext) => _NotFoundSheet(
         barcode: barcode,
         date: widget.date,
         meal: widget.meal,
-        onAdded: () => Navigator.pop(context, true),
-        onRescan: () {
-          Navigator.pop(context);
-          _resetScanner();
-        },
+        onAdded: () => _closeResultSheet(sheetContext, true),
+        onRescan: () => _closeResultSheet(sheetContext, false),
       ),
-    ).then((_) {
-      if (mounted && _scanning == false && _loading == false && _error == null) {
-        _resetScanner();
-      }
-    });
+    ).then(_handleResultSheetClosed);
   }
 
   @override
@@ -164,7 +159,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                   IconButton(
                     icon: const Icon(Icons.arrow_back_ios_new_rounded,
                         color: Colors.white),
-                    onPressed: () => Navigator.pop(context),
+                    onPressed: () => popAfterFocusSettles(context),
                   ),
                   const Expanded(
                     child: Text('Scan Barcode',
@@ -233,7 +228,7 @@ class _BarcodeScannerScreenState extends State<BarcodeScannerScreen> {
                         ),
                         const SizedBox(width: 12),
                         TextButton(
-                          onPressed: () => Navigator.pop(context),
+                          onPressed: () => popAfterFocusSettles(context),
                           child: const Text('Go Back',
                               style: TextStyle(color: Color(0xFF888899))),
                         ),
@@ -514,10 +509,7 @@ class _FoundSheetState extends State<_FoundSheet> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onRescan();
-                  },
+                  onPressed: widget.onRescan,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF888899),
                     side: const BorderSide(color: Color(0xFF333355)),

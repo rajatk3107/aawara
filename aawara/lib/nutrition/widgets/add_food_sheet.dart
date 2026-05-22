@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 import '../screens/add_custom_food_screen.dart';
 import '../screens/barcode_scanner_screen.dart';
 
@@ -108,7 +109,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
 
   Future<void> _logPreset(MealPreset preset) async {
     await _db.logMealPreset(preset.id, widget.date, widget.meal);
-    if (mounted) Navigator.pop(context, true);
+    if (mounted) popAfterFocusSettles(context, true);
   }
 
   Future<void> _search(String q) async {
@@ -122,7 +123,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     setState(() => _adding = true);
     await _db.addNutritionEntry(
         widget.date, _selected!.id, widget.meal, _quantity);
-    if (mounted) Navigator.pop(context, true);
+    if (mounted) popAfterFocusSettles(context, true);
   }
 
   void _selectFood(Food food) {
@@ -231,7 +232,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                   ),
                 ),
                 GestureDetector(
-                  onTap: () => Navigator.pop(context),
+                  onTap: () => popAfterFocusSettles(context),
                   child: const Icon(Icons.close_rounded,
                       color: Color(0xFF555577)),
                 ),
@@ -818,7 +819,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
       ),
     );
     // Scanner already added the entry to the log — close this sheet too.
-    if (added == true && mounted) Navigator.pop(context, true);
+    if (added == true && mounted) popAfterFocusSettles(context, true);
   }
 
   Future<void> _openCustomFood() async {

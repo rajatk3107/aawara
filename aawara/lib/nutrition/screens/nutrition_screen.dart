@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
 import '../../workout/widgets/step_counter_card.dart';
+import '../../utils/safe_navigation.dart';
 import '../widgets/add_food_sheet.dart';
 import '../widgets/water_tracker_card.dart';
 import 'meal_presets_screen.dart';
@@ -555,13 +556,13 @@ class _NutritionScreenState extends State<NutritionScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: () => popAfterFocusSettles(ctx),
               child: const Text('Cancel',
                   style: TextStyle(color: Color(0xFF888899)))),
           ElevatedButton(
             onPressed: () {
               final v = ctrl.text.trim();
-              Navigator.pop(ctx, v.isNotEmpty ? v : null);
+              popAfterFocusSettles(ctx, v.isNotEmpty ? v : null);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),
@@ -618,4 +619,3 @@ class _NutritionScreenState extends State<NutritionScreen> {
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
 }
-

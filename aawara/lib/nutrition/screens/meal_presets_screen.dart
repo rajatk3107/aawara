@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 
 class MealPresetsScreen extends StatefulWidget {
   /// If provided, tapping a preset will log it to this date + show meal picker.
@@ -66,7 +67,7 @@ class _MealPresetsScreenState extends State<MealPresetsScreen> {
       backgroundColor: const Color(0xFF1A1A2E),
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Padding(
+      builder: (sheetContext) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -92,7 +93,7 @@ class _MealPresetsScreenState extends State<MealPresetsScreen> {
                           style: const TextStyle(
                               color: Color(0xFF555577), fontSize: 12))
                       : null,
-                  onTap: () => Navigator.pop(context, m),
+                  onTap: () => popAfterFocusSettles(sheetContext, m),
                 )),
           ],
         ),
@@ -102,7 +103,7 @@ class _MealPresetsScreenState extends State<MealPresetsScreen> {
     await _db.logMealPreset(preset.id, widget.logToDate!, meal);
     HapticFeedback.mediumImpact();
     if (!mounted) return;
-    Navigator.pop(context, true); // signal that we logged something
+    popAfterFocusSettles(context, true); // signal that we logged something
   }
 
   @override
@@ -115,7 +116,7 @@ class _MealPresetsScreenState extends State<MealPresetsScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => popAfterFocusSettles(context),
         ),
         title: const Text('Saved Meals',
             style: TextStyle(

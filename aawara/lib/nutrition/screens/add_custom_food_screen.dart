@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 
 class AddCustomFoodScreen extends StatefulWidget {
   final String? date;
@@ -54,7 +55,7 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
     );
 
     final created = await WorkoutDatabase.instance.createCustomFood(food);
-    if (mounted) Navigator.pop(context, created);
+    if (mounted) popAfterFocusSettles(context, created);
   }
 
   @override
@@ -67,7 +68,7 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => popAfterFocusSettles(context),
         ),
         title: const Text('Create Custom Food',
             style: TextStyle(

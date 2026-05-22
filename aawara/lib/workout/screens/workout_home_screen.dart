@@ -15,6 +15,7 @@ import '../../notes/notes_list_screen.dart';
 import '../../settings_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 import '../../nutrition/screens/nutrition_screen.dart';
+import '../../utils/safe_navigation.dart';
 import '../widgets/workout_heatmap.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
@@ -268,14 +269,14 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => popAfterFocusSettles(ctx),
             child:
                 const Text('Cancel', style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton(
             onPressed: () {
               final v = double.tryParse(controller.text);
-              Navigator.pop(ctx, v);
+              popAfterFocusSettles(ctx, v);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),

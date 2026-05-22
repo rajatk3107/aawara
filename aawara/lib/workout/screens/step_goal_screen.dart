@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/step_goal_presets.dart';
 import '../../services/step_tracking_service.dart';
+import '../../utils/safe_navigation.dart';
 
 class StepGoalScreen extends StatefulWidget {
   final bool isFirstSetup;
@@ -121,7 +122,7 @@ class _StepGoalScreenState extends State<StepGoalScreen> {
     }
 
     if (!mounted) return;
-    Navigator.of(context).pop(goal);
+    popAfterFocusSettles(context, goal);
   }
 
   String _fmt(int n) {
@@ -320,7 +321,7 @@ class _StepGoalScreenState extends State<StepGoalScreen> {
                   onTap: () {
                     showDialog(
                       context: context,
-                      builder: (_) => AlertDialog(
+                      builder: (dialogContext) => AlertDialog(
                         backgroundColor: const Color(0xFF1A1A2E),
                         title: const Text('Enter step goal',
                             style: TextStyle(color: Colors.white)),
@@ -340,7 +341,7 @@ class _StepGoalScreenState extends State<StepGoalScreen> {
                         ),
                         actions: [
                           TextButton(
-                            onPressed: () => Navigator.pop(context),
+                            onPressed: () => popAfterFocusSettles(dialogContext),
                             child: const Text('Cancel',
                                 style:
                                     TextStyle(color: Color(0xFF888899))),
@@ -356,7 +357,7 @@ class _StepGoalScreenState extends State<StepGoalScreen> {
                                       _customSteps.toString();
                                 });
                               }
-                              Navigator.pop(context);
+                              popAfterFocusSettles(dialogContext);
                             },
                             child: const Text('OK',
                                 style: TextStyle(

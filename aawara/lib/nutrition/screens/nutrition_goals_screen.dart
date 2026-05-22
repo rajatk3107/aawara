@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 
 class NutritionGoalsScreen extends StatefulWidget {
   const NutritionGoalsScreen({super.key});
@@ -56,13 +57,7 @@ class _NutritionGoalsScreenState extends State<NutritionGoalsScreen> {
     );
     await WorkoutDatabase.instance.saveNutritionGoals(goals);
     if (mounted) {
-      setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Goals saved'),
-        backgroundColor: Color(0xFF2ECC71),
-        behavior: SnackBarBehavior.floating,
-      ));
-      Navigator.pop(context, true);
+      popAfterFocusSettles(context, true);
     }
   }
 
@@ -84,7 +79,7 @@ class _NutritionGoalsScreenState extends State<NutritionGoalsScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () => popAfterFocusSettles(context),
         ),
         title: const Text('Nutrition Goals',
             style: TextStyle(
