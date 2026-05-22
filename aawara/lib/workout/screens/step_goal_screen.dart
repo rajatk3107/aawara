@@ -138,6 +138,7 @@ class _StepGoalScreenState extends State<StepGoalScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         backgroundColor: const Color(0xFF0D0D1A),
         foregroundColor: Colors.white,

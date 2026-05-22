@@ -452,6 +452,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       body: _loading
           ? const Center(
               child: CircularProgressIndicator(color: Color(0xFFFFD700)))

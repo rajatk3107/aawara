@@ -87,6 +87,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       body: NestedScrollView(
         headerSliverBuilder: (context, _) => [
           SliverAppBar(

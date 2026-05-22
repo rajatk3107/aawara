@@ -293,6 +293,7 @@ class _NotesListScreenState extends State<NotesListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       appBar: _buildAppBar(),
       body: Column(
         children: [
