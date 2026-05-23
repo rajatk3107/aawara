@@ -43,6 +43,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _stepNotify = true;
   bool _stepShowHome = true;
   bool _batteryTipShown = false;
+  bool _hcSyncing = false;
+  String? _hcSyncResult;
 
   @override
   void initState() {
@@ -542,6 +544,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Platform-specific rows
             if (Platform.isAndroid) ...[
               _divider(),
+              // Samsung Health / Health Connect sync row
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1DB954).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: _hcSyncing
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF1DB954)),
+                            )
+                          : const Icon(Icons.watch_rounded,
+                              color: Color(0xFF1DB954), size: 18),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Sync Samsung Watch steps',
+                              style:
+                                  TextStyle(color: Colors.white, fontSize: 15)),
+                          if (_hcSyncResult != null)
+                            Text(_hcSyncResult!,
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _hcSyncing ? null : _syncHealthConnect,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1DB954).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color:
+                                  const Color(0xFF1DB954).withValues(alpha: 0.3)),
+                        ),
+                        child: Text(
+                          _hcSyncing ? 'Syncing…' : 'Sync now',
+                          style: TextStyle(
+                              color: _hcSyncing
+                                  ? const Color(0xFF555577)
+                                  : const Color(0xFF1DB954),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _divider(),
               Padding(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 16, vertical: 10),
@@ -629,6 +694,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _openBatterySettings() async {
     await openAppSettings();
+  }
+
+  Future<void> _syncHealthConnect() async {
+    setState(() {
+      _hcSyncing = true;
+      _hcSyncResult = null;
+    });
+    final result = await StepTrackingService.syncHealthConnectHistory(days: 30);
+    if (!mounted) return;
+    if (result.updated == 0 && result.skipped == 0) {
+      setState(() {
+        _hcSyncing = false;
+        _hcSyncResult =
+            'Could not connect — open Samsung Health → Health Connect and enable step sync';
+      });
+    } else {
+      setState(() {
+        _hcSyncing = false;
+        _hcSyncResult = result.updated > 0
+            ? '${result.updated} day${result.updated == 1 ? '' : 's'} updated from Samsung Health'
+            : 'Already up to date';
+      });
+    }
+    // Refresh today's live count
+    await StepTrackingService.refreshStream();
   }
 
   void _showBatteryTipDialog() {

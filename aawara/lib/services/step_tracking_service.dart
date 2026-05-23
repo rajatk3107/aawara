@@ -125,16 +125,102 @@ class StepTrackingService {
 
   // Push latest step count to UI stream — called on app open and resume.
   // On iOS this also writes to the DB so the progress chart stays current.
+  // On Android, also reads Health Connect (Samsung Watch steps) and takes the max.
   static Future<void> refreshStream() async {
     if (!await isEnabled()) return;
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
-    final steps = await getTodaySteps();
-    // On iOS persist the fresh HealthKit value so history is up-to-date
+    var steps = await getTodaySteps();
     if (Platform.isIOS && steps > 0) {
       await WorkoutDatabase.instance.upsertStepLog(_todayDate(), steps, goal);
     }
+    if (Platform.isAndroid) {
+      // Silently merge Health Connect steps (includes Samsung Watch data)
+      final hcSteps = await _getHealthConnectStepsForDay(DateTime.now());
+      if (hcSteps > steps) {
+        steps = hcSteps;
+        await WorkoutDatabase.instance.upsertStepLog(_todayDate(), steps, goal);
+      }
+    }
     _stepController.add(StepUpdate(steps: steps, goal: goal));
+  }
+
+  // Reads today's steps from Health Connect (includes Samsung Watch).
+  // Returns 0 if Health Connect is unavailable or permission not granted.
+  static Future<int> _getHealthConnectStepsForDay(DateTime date) async {
+    try {
+      final health = Health();
+      final start = DateTime(date.year, date.month, date.day);
+      final end = date.year == DateTime.now().year &&
+              date.month == DateTime.now().month &&
+              date.day == DateTime.now().day
+          ? DateTime.now()
+          : DateTime(date.year, date.month, date.day, 23, 59, 59);
+      final steps = await health.getTotalStepsInInterval(start, end);
+      return steps ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  // Syncs the past [days] days from Health Connect into the step_logs table.
+  // Only increases step counts — never reduces an existing value.
+  // Call this after granting Health Connect permission.
+  static Future<({int updated, int skipped})> syncHealthConnectHistory({
+    int days = 30,
+  }) async {
+    if (!Platform.isAndroid) return (updated: 0, skipped: 0);
+    try {
+      final health = Health();
+      final authorized = await health.requestAuthorization(
+        [HealthDataType.STEPS],
+        permissions: [HealthDataAccess.READ],
+      );
+      if (!authorized) return (updated: 0, skipped: 0);
+
+      final prefs = await SharedPreferences.getInstance();
+      final goal = prefs.getInt('step_goal') ?? 8000;
+      int updated = 0;
+      int skipped = 0;
+
+      for (int i = 0; i < days; i++) {
+        final date = DateTime.now().subtract(Duration(days: i));
+        final dateStr =
+            '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        final hcSteps = await _getHealthConnectStepsForDay(date);
+        if (hcSteps <= 0) {
+          skipped++;
+          continue;
+        }
+        final existing = await WorkoutDatabase.instance.getStepLog(dateStr);
+        final existingSteps =
+            existing != null ? (existing['steps'] as num).toInt() : 0;
+        if (hcSteps > existingSteps) {
+          await WorkoutDatabase.instance.upsertStepLog(dateStr, hcSteps, goal);
+          updated++;
+        } else {
+          skipped++;
+        }
+      }
+      return (updated: updated, skipped: skipped);
+    } catch (_) {
+      return (updated: 0, skipped: 0);
+    }
+  }
+
+  // Returns true if Health Connect permission is already granted.
+  static Future<bool> hasHealthConnectPermission() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final health = Health();
+      return await health.hasPermissions(
+            [HealthDataType.STEPS],
+            permissions: [HealthDataAccess.READ],
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ── Android ──────────────────────────────────────────────────────────────
