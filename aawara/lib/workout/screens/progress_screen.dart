@@ -6,6 +6,7 @@ import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
 import '../widgets/workout_heatmap.dart';
+import 'body_measurements_screen.dart';
 import 'exercise_progress_screen.dart';
 import 'progress_photos_screen.dart';
 import 'step_goal_screen.dart';
@@ -653,10 +654,62 @@ class _ProgressScreenState extends State<ProgressScreen>
     );
   }
 
+  Widget _buildMeasurementsBanner() {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const BodyMeasurementsScreen()),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF1E1E35)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: const Color(0xFF8E44AD).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.straighten_rounded,
+                  color: Color(0xFF8E44AD), size: 22),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Body Measurements',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold)),
+                  SizedBox(height: 2),
+                  Text('Track waist, chest, arms & more over time',
+                      style: TextStyle(
+                          color: Color(0xFF888899), fontSize: 12)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded,
+                color: Color(0xFF8E44AD), size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildBodyWeightTab() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        _buildMeasurementsBanner(),
+        const SizedBox(height: 12),
         _buildSectionHeader('Body Weight'),
         const SizedBox(height: 4),
         const Text('Track your daily weight over time',

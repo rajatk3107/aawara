@@ -10,12 +10,99 @@ import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../widgets/muscle_group_filter.dart';
 import '../../nutrition/models/nutrition_models.dart';
+import '../../notes/notes_database.dart';
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 enum _Range { today, week, month, year, all, custom }
 
 enum _Format { json, csv }
+
+enum _DataCategory {
+  workouts,
+  personalRecords,
+  nutrition,
+  nutritionGoals,
+  bodyWeight,
+  bodyMeasurements,
+  water,
+  wellness,
+  achievements,
+  stepLogs,
+  customFoods,
+  customExercises,
+  mealPresets,
+  quickStart,
+  dayOverrides,
+  notes,
+}
+
+typedef _CatInfo = ({String emoji, String label, String desc});
+
+const Map<_DataCategory, _CatInfo> _catInfo = {
+  _DataCategory.workouts: (emoji: '🏋️', label: 'Workouts', desc: 'Workout sessions, sets & reps'),
+  _DataCategory.personalRecords: (emoji: '🏆', label: 'Personal Records', desc: 'Best lifts & estimated 1RM per exercise'),
+  _DataCategory.nutrition: (emoji: '🥗', label: 'Nutrition / Food', desc: 'Daily food diary & per-meal entries'),
+  _DataCategory.nutritionGoals: (emoji: '🎯', label: 'Nutrition Goals', desc: 'Daily calorie & macro targets'),
+  _DataCategory.bodyWeight: (emoji: '⚖️', label: 'Body Weight', desc: 'Weight tracking history'),
+  _DataCategory.bodyMeasurements: (emoji: '📏', label: 'Body Measurements', desc: 'Waist, chest, arms, thighs & all other dimensions'),
+  _DataCategory.water: (emoji: '💧', label: 'Water Intake', desc: 'Daily hydration logs'),
+  _DataCategory.wellness: (emoji: '🌙', label: 'Wellness', desc: 'Sleep hours, energy & soreness levels'),
+  _DataCategory.achievements: (emoji: '🎖️', label: 'Achievements', desc: 'Unlocked badges & milestones'),
+  _DataCategory.stepLogs: (emoji: '👟', label: 'Step Logs', desc: 'Daily step count & goals'),
+  _DataCategory.customFoods: (emoji: '🥦', label: 'Custom Foods', desc: 'Foods you created manually'),
+  _DataCategory.customExercises: (emoji: '💪', label: 'Custom Exercises', desc: 'Exercises you added yourself'),
+  _DataCategory.mealPresets: (emoji: '🍽️', label: 'Meal Presets', desc: 'Saved meal templates'),
+  _DataCategory.quickStart: (emoji: '⚡', label: 'Quick-Start Templates', desc: 'Saved workout quick-start templates'),
+  _DataCategory.dayOverrides: (emoji: '📅', label: 'Schedule Overrides', desc: 'Custom schedule day configurations'),
+  _DataCategory.notes: (emoji: '📝', label: 'Notes', desc: 'Personal notes, journals & thoughts'),
+};
+
+// Categories available for each export type
+const _jsonExportCats = [
+  _DataCategory.workouts,
+  _DataCategory.personalRecords,
+  _DataCategory.nutrition,
+  _DataCategory.nutritionGoals,
+  _DataCategory.bodyWeight,
+  _DataCategory.bodyMeasurements,
+  _DataCategory.water,
+  _DataCategory.wellness,
+  _DataCategory.stepLogs,
+];
+
+const _aiExportCats = [
+  _DataCategory.workouts,
+  _DataCategory.personalRecords,
+  _DataCategory.nutrition,
+  _DataCategory.nutritionGoals,
+  _DataCategory.bodyWeight,
+  _DataCategory.bodyMeasurements,
+  _DataCategory.water,
+  _DataCategory.wellness,
+  _DataCategory.achievements,
+  _DataCategory.stepLogs,
+  _DataCategory.notes,
+];
+
+const _backupExportCats = [
+  _DataCategory.workouts,
+  _DataCategory.personalRecords,
+  _DataCategory.nutrition,
+  _DataCategory.nutritionGoals,
+  _DataCategory.bodyWeight,
+  _DataCategory.bodyMeasurements,
+  _DataCategory.water,
+  _DataCategory.wellness,
+  _DataCategory.achievements,
+  _DataCategory.stepLogs,
+  _DataCategory.customFoods,
+  _DataCategory.customExercises,
+  _DataCategory.mealPresets,
+  _DataCategory.quickStart,
+  _DataCategory.dayOverrides,
+  _DataCategory.notes,
+];
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -99,37 +186,64 @@ class _ExportScreenState extends State<ExportScreen> {
     }
   }
 
+  // ─── Category picker ──────────────────────────────────────────────────────
+
+  Future<Set<_DataCategory>?> _showCategoryPicker({
+    required List<_DataCategory> available,
+    required Set<_DataCategory> initial,
+    required String title,
+  }) {
+    return showModalBottomSheet<Set<_DataCategory>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _CategoryPickerSheet(
+        available: available,
+        initial: initial,
+        title: title,
+      ),
+    );
+  }
+
   // ─── Export ───────────────────────────────────────────────────────────────
 
   Future<void> _export() async {
+    final availableCats = _format == _Format.csv
+        ? [_DataCategory.workouts]
+        : _jsonExportCats;
+
+    final selected = await _showCategoryPicker(
+      available: availableCats,
+      initial: availableCats.toSet(),
+      title: 'What to Export',
+    );
+    if (selected == null || selected.isEmpty || !mounted) return;
+
     setState(() => _exporting = true);
     try {
       final (from, to) = _fromTo;
-      final logs = await _db.getWorkoutLogsForExport(
-        fromDate: from,
-        toDate: to,
-        exerciseId: _filterExercise?.id,
-      );
-
-      // Build exercise name lookup
+      List<WorkoutLog> logs = [];
       final exerciseMap = <String, Exercise>{};
-      for (final log in logs) {
-        for (final exLog in log.exercises) {
-          if (!exerciseMap.containsKey(exLog.exerciseId)) {
-            final ex = await _db.getExerciseById(exLog.exerciseId);
-            if (ex != null) exerciseMap[exLog.exerciseId] = ex;
+
+      if (selected.contains(_DataCategory.workouts)) {
+        logs = await _db.getWorkoutLogsForExport(
+          fromDate: from,
+          toDate: to,
+          exerciseId: _filterExercise?.id,
+        );
+        for (final log in logs) {
+          for (final exLog in log.exercises) {
+            if (!exerciseMap.containsKey(exLog.exerciseId)) {
+              final ex = await _db.getExerciseById(exLog.exerciseId);
+              if (ex != null) exerciseMap[exLog.exerciseId] = ex;
+            }
           }
         }
       }
 
-      List<DailyNutritionSummary> nutritionData = [];
-      if (_format == _Format.json) {
-        nutritionData = await _db.getNutritionHistory(from, to);
-      }
-
       final content = _format == _Format.csv
           ? _buildCsv(logs, exerciseMap)
-          : _buildJson(logs, exerciseMap, nutritionData, from, to);
+          : await _buildJson(logs, exerciseMap, selected, from, to);
 
       final ext = _format == _Format.csv ? 'csv' : 'json';
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
@@ -161,9 +275,37 @@ class _ExportScreenState extends State<ExportScreen> {
   // ─── AI Export ───────────────────────────────────────────────────────────
 
   Future<void> _exportForAI() async {
+    final selected = await _showCategoryPicker(
+      available: _aiExportCats,
+      initial: _aiExportCats.toSet(),
+      title: 'What to Include in AI Export',
+    );
+    if (selected == null || selected.isEmpty || !mounted) return;
+
     setState(() => _exportingAI = true);
     try {
-      final content = await _db.exportForAI();
+      final catNames = selected
+          .where((c) => c != _DataCategory.notes)
+          .map((c) => c.name)
+          .toSet();
+
+      var content = await _db.exportForAI(categories: catNames);
+
+      if (selected.contains(_DataCategory.notes)) {
+        final notes = await NotesDatabase.instance.getNotes();
+        if (notes.isNotEmpty) {
+          final sb = StringBuffer(content);
+          sb.writeln('\n## Personal Notes');
+          for (final note in notes) {
+            sb.writeln('### ${note.title} (${DateFormat('yyyy-MM-dd').format(note.updatedAt)})');
+            // content is Quill Delta JSON — include raw for AI context
+            sb.writeln(note.content);
+            sb.writeln();
+          }
+          content = sb.toString();
+        }
+      }
+
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'aawara_ai_export_$stamp.md';
       final tmpDir = await getTemporaryDirectory();
@@ -190,9 +332,47 @@ class _ExportScreenState extends State<ExportScreen> {
   // ─── Full Backup Export ───────────────────────────────────────────────────
 
   Future<void> _exportFullBackup() async {
+    final selected = await _showCategoryPicker(
+      available: _backupExportCats,
+      initial: _backupExportCats.toSet(),
+      title: 'What to Include in Backup',
+    );
+    if (selected == null || selected.isEmpty || !mounted) return;
+
     setState(() => _exportingFullBackup = true);
     try {
-      final content = await _db.exportFullBackup();
+      final catNames = selected
+          .where((c) => c != _DataCategory.notes)
+          .map((c) => c.name)
+          .toSet();
+
+      var content = await _db.exportFullBackup(categories: catNames);
+
+      if (selected.contains(_DataCategory.notes)) {
+        final data = jsonDecode(content) as Map<String, dynamic>;
+        final notes = await NotesDatabase.instance.getNotes();
+        final folders = await NotesDatabase.instance.getFolders();
+        final tags = await NotesDatabase.instance.getTags();
+        if (notes.isNotEmpty) {
+          data['notes'] = notes.map((n) => {
+            'id': n.id,
+            'title': n.title,
+            'content': n.content,
+            'folder_id': n.folderId,
+            'tag_ids': n.tagIds,
+            'created_at': n.createdAt.millisecondsSinceEpoch,
+            'updated_at': n.updatedAt.millisecondsSinceEpoch,
+          }).toList();
+        }
+        if (folders.isNotEmpty) {
+          data['note_folders'] = folders.map((f) => f.toMap()).toList();
+        }
+        if (tags.isNotEmpty) {
+          data['note_tags'] = tags.map((t) => t.toMap()).toList();
+        }
+        content = const JsonEncoder.withIndent('  ').convert(data);
+      }
+
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'aawara_fullbackup_$stamp.json';
       final tmpDir = await getTemporaryDirectory();
@@ -348,68 +528,159 @@ class _ExportScreenState extends State<ExportScreen> {
 
   // ─── JSON builder ─────────────────────────────────────────────────────────
 
-  String _buildJson(
+  Future<String> _buildJson(
     List<WorkoutLog> logs,
     Map<String, Exercise> exMap,
-    List<DailyNutritionSummary> nutrition,
+    Set<_DataCategory> cats,
     String from,
     String to,
-  ) {
-    final payload = {
+  ) async {
+    final db = await _db.database;
+    bool has(c) => cats.contains(c);
+
+    // Fetch additional data per selected category
+    List<Map<String, dynamic>> prs = [];
+    if (has(_DataCategory.personalRecords)) {
+      prs = await db.rawQuery('''
+        SELECT ep.best_1rm, ep.date, e.name
+        FROM exercise_prs ep JOIN exercises e ON e.id = ep.exercise_id
+        ORDER BY ep.best_1rm DESC
+      ''');
+    }
+
+    List<DailyNutritionSummary> nutritionData = [];
+    if (has(_DataCategory.nutrition)) {
+      nutritionData = await _db.getNutritionHistory(from, to);
+    }
+
+    List<Map<String, dynamic>> nutritionGoals = [];
+    if (has(_DataCategory.nutritionGoals)) {
+      nutritionGoals = await db.query('nutrition_goals', limit: 1);
+    }
+
+    List<Map<String, dynamic>> weightData = [];
+    if (has(_DataCategory.bodyWeight)) {
+      weightData = await db.query('body_weight_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
+    }
+
+    List<Map<String, dynamic>> waterData = [];
+    if (has(_DataCategory.water)) {
+      waterData = await db.query('water_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
+    }
+
+    List<Map<String, dynamic>> wellnessData = [];
+    if (has(_DataCategory.wellness)) {
+      wellnessData = await db.query('wellness_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
+    }
+
+    List<Map<String, dynamic>> stepData = [];
+    if (has(_DataCategory.stepLogs)) {
+      stepData = await db.query('step_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
+    }
+
+    List<Map<String, dynamic>> measurementData = [];
+    if (has(_DataCategory.bodyMeasurements)) {
+      measurementData = await db.query('body_measurements',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC, type ASC');
+    }
+
+    final payload = <String, dynamic>{
       'app': 'aawara',
-      'schema_version': 2,
+      'schema_version': 3,
       'exported_at': DateTime.now().toIso8601String(),
       'date_range': {'from': from, 'to': to},
       'exercise_filter': _filterExercise?.name ?? 'All',
-      'total_workouts': logs.length,
-      'total_sets': logs.fold(0, (s, l) => s + l.totalSets),
-      if (nutrition.isNotEmpty)
-        'nutrition_daily': nutrition
-            .map((n) => {
-                  'date': n.date,
-                  'calories': n.calories.round(),
-                  'protein_g': double.parse(n.proteinG.toStringAsFixed(1)),
-                  'carbs_g': double.parse(n.carbsG.toStringAsFixed(1)),
-                  'fat_g': double.parse(n.fatG.toStringAsFixed(1)),
-                })
-            .toList(),
-      'workouts': logs
-          .map((log) => {
-                'date': log.date,
-                'workout_name': log.workoutName,
-                'completed': log.completed,
-                if (log.durationSeconds != null)
-                  'duration_seconds': log.durationSeconds,
-                'total_volume_kg': log.totalVolume,
-                'exercises': log.exercises
-                    .map((exLog) {
-                      final ex = exMap[exLog.exerciseId];
-                      return {
-                        'name': ex?.name ?? exLog.exerciseId,
-                        'muscle_group': ex?.muscleGroup ?? '',
-                        'equipment': ex?.equipment ?? '',
-                        'exercise_type': ex?.exerciseType ?? 'strength',
-                        'sets': exLog.sets
-                            .map((s) => {
-                                  'set_number': s.setNumber,
-                                  'is_completed': s.isCompleted,
-                                  if (s.weight != null) 'weight_kg': s.weight,
-                                  if (s.reps != null) 'reps': s.reps,
-                                  if (s.durationSeconds != null)
-                                    'duration_seconds': s.durationSeconds,
-                                  if (s.speed != null) 'speed': s.speed,
-                                  if (s.incline != null) 'incline': s.incline,
-                                  if (s.resistance != null)
-                                    'resistance': s.resistance,
-                                  if (s.distanceKm != null)
-                                    'distance_km': s.distanceKm,
-                                })
-                            .toList(),
-                      };
-                    })
-                    .toList(),
-              })
-          .toList(),
+      if (has(_DataCategory.workouts)) ...{
+        'total_workouts': logs.length,
+        'total_sets': logs.fold(0, (s, l) => s + l.totalSets),
+        'workouts': logs.map((log) => {
+          'date': log.date,
+          'workout_name': log.workoutName,
+          'completed': log.completed,
+          if (log.durationSeconds != null) 'duration_seconds': log.durationSeconds,
+          'total_volume_kg': log.totalVolume,
+          'exercises': log.exercises.map((exLog) {
+            final ex = exMap[exLog.exerciseId];
+            return {
+              'name': ex?.name ?? exLog.exerciseId,
+              'muscle_group': ex?.muscleGroup ?? '',
+              'equipment': ex?.equipment ?? '',
+              'exercise_type': ex?.exerciseType ?? 'strength',
+              'sets': exLog.sets.map((s) => {
+                'set_number': s.setNumber,
+                'is_completed': s.isCompleted,
+                if (s.weight != null) 'weight_kg': s.weight,
+                if (s.reps != null) 'reps': s.reps,
+                if (s.durationSeconds != null) 'duration_seconds': s.durationSeconds,
+                if (s.speed != null) 'speed': s.speed,
+                if (s.incline != null) 'incline': s.incline,
+                if (s.resistance != null) 'resistance': s.resistance,
+                if (s.distanceKm != null) 'distance_km': s.distanceKm,
+              }).toList(),
+            };
+          }).toList(),
+        }).toList(),
+      },
+      if (prs.isNotEmpty) 'personal_records': prs.map((pr) => {
+        'exercise': pr['name'],
+        'best_1rm_kg': pr['best_1rm'],
+        'date': pr['date'],
+      }).toList(),
+      if (nutritionGoals.isNotEmpty) 'nutrition_goals': {
+        'calories': nutritionGoals.first['calories'],
+        'protein_g': nutritionGoals.first['protein_g'],
+        'carbs_g': nutritionGoals.first['carbs_g'],
+        'fat_g': nutritionGoals.first['fat_g'],
+      },
+      if (nutritionData.isNotEmpty) 'nutrition_daily': nutritionData.map((n) => {
+        'date': n.date,
+        'calories': n.calories.round(),
+        'protein_g': double.parse(n.proteinG.toStringAsFixed(1)),
+        'carbs_g': double.parse(n.carbsG.toStringAsFixed(1)),
+        'fat_g': double.parse(n.fatG.toStringAsFixed(1)),
+      }).toList(),
+      if (weightData.isNotEmpty) 'body_weight': weightData.map((r) => {
+        'date': r['date'],
+        'weight_kg': r['weight_kg'],
+        if (r['notes'] != null) 'notes': r['notes'],
+      }).toList(),
+      if (waterData.isNotEmpty) 'water_intake': waterData.map((r) => {
+        'date': r['date'],
+        'glasses_drunk': r['glasses_drunk'],
+        'target_glasses': r['target_glasses'],
+        'litres': ((r['glasses_drunk'] as int) * 0.25),
+      }).toList(),
+      if (wellnessData.isNotEmpty) 'wellness': wellnessData.map((r) => {
+        'date': r['date'],
+        'sleep_hours': r['sleep_hours'],
+        'energy': r['energy'],
+        'soreness': r['soreness'],
+        if (r['notes'] != null) 'notes': r['notes'],
+      }).toList(),
+      if (stepData.isNotEmpty) 'step_logs': stepData.map((r) => {
+        'date': r['date'],
+        'steps': r['steps'],
+        'goal': r['goal'],
+      }).toList(),
+      if (measurementData.isNotEmpty) 'body_measurements': measurementData.map((r) => {
+        'date': r['date'],
+        'type': r['type'],
+        'value_cm': r['value_cm'],
+      }).toList(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
   }
@@ -1035,6 +1306,220 @@ class _ExportScreenState extends State<ExportScreen> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+// ─── Category picker sheet ────────────────────────────────────────────────────
+
+class _CategoryPickerSheet extends StatefulWidget {
+  final List<_DataCategory> available;
+  final Set<_DataCategory> initial;
+  final String title;
+
+  const _CategoryPickerSheet({
+    required this.available,
+    required this.initial,
+    required this.title,
+  });
+
+  @override
+  State<_CategoryPickerSheet> createState() => _CategoryPickerSheetState();
+}
+
+class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
+  late Set<_DataCategory> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set.from(widget.initial);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final allSelected = _selected.length == widget.available.length;
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      maxChildSize: 0.95,
+      minChildSize: 0.45,
+      builder: (ctx, scrollCtrl) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF0D0D1A),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 6),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFF444466),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 6, 12, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${_selected.length} of ${widget.available.length} selected',
+                          style: const TextStyle(
+                              color: Color(0xFF888899), fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      if (allSelected) {
+                        _selected.clear();
+                      } else {
+                        _selected = Set.from(widget.available);
+                      }
+                    }),
+                    child: Text(
+                      allSelected ? 'Deselect All' : 'Select All',
+                      style: const TextStyle(color: Color(0xFFFFD700)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(color: Color(0xFF1E1E35), height: 1),
+            Expanded(
+              child: ListView.builder(
+                controller: scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                itemCount: widget.available.length,
+                itemBuilder: (ctx, i) {
+                  final cat = widget.available[i];
+                  final info = _catInfo[cat]!;
+                  final isSelected = _selected.contains(cat);
+                  return GestureDetector(
+                    onTap: () => setState(() {
+                      if (isSelected) {
+                        _selected.remove(cat);
+                      } else {
+                        _selected.add(cat);
+                      }
+                    }),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? const Color(0xFFFFD700).withValues(alpha: 0.08)
+                            : const Color(0xFF1A1A2E),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.4)
+                              : const Color(0xFF2A2A3E),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Text(info.emoji,
+                              style: const TextStyle(fontSize: 22)),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  info.label,
+                                  style: TextStyle(
+                                    color: isSelected
+                                        ? Colors.white
+                                        : const Color(0xFFCCCCDD),
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  info.desc,
+                                  style: const TextStyle(
+                                      color: Color(0xFF555577), fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: isSelected
+                                  ? const Color(0xFFFFD700)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: isSelected
+                                    ? const Color(0xFFFFD700)
+                                    : const Color(0xFF444466),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: isSelected
+                                ? const Icon(Icons.check_rounded,
+                                    color: Colors.black, size: 14)
+                                : null,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: ElevatedButton(
+                  onPressed: _selected.isEmpty
+                      ? null
+                      : () => Navigator.pop(ctx, Set<_DataCategory>.from(_selected)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFD700),
+                    foregroundColor: Colors.black,
+                    disabledBackgroundColor: const Color(0xFF2A2A3E),
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14)),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    _selected.isEmpty
+                        ? 'Select at least one category'
+                        : 'Continue with ${_selected.length} selected',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 15),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

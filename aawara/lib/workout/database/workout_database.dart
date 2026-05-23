@@ -26,7 +26,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 13,
+      version: 14,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -45,6 +45,20 @@ class WorkoutDatabase {
     if (oldVersion < 11) await _migrateV11(db);
     if (oldVersion < 12) await _migrateV12(db);
     if (oldVersion < 13) await _migrateV13(db);
+    if (oldVersion < 14) await _migrateV14(db);
+  }
+
+  Future<void> _migrateV14(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS body_measurements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL,
+        value_cm REAL NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(date, type)
+      )
+    ''');
   }
 
   Future<void> _migrateV11(Database db) async {
@@ -490,6 +504,17 @@ class WorkoutDatabase {
         steps INTEGER NOT NULL DEFAULT 0,
         goal INTEGER NOT NULL,
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE body_measurements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        type TEXT NOT NULL,
+        value_cm REAL NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(date, type)
       )
     ''');
 
@@ -1518,6 +1543,79 @@ class WorkoutDatabase {
     return (rows.first['weight_kg'] as num).toDouble();
   }
 
+  // ─── BODY MEASUREMENTS ──────────────────────────────────────────────────────
+
+  Future<void> logMeasurement(String date, String type, double valueCm) async {
+    final db = await database;
+    await db.insert(
+      'body_measurements',
+      {'date': date, 'type': type, 'value_cm': valueCm},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deleteMeasurement(String date, String type) async {
+    final db = await database;
+    await db.delete('body_measurements',
+        where: 'date = ? AND type = ?', whereArgs: [date, type]);
+  }
+
+  Future<Map<String, double>> getMeasurementsForDate(String date) async {
+    final db = await database;
+    final rows = await db.query('body_measurements',
+        where: 'date = ?', whereArgs: [date]);
+    return {
+      for (final r in rows) r['type'] as String: (r['value_cm'] as num).toDouble()
+    };
+  }
+
+  /// Latest value per measurement type.
+  Future<Map<String, double>> getLatestMeasurements() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT type, value_cm
+      FROM body_measurements
+      WHERE rowid IN (
+        SELECT MAX(rowid) FROM body_measurements GROUP BY type
+      )
+    ''');
+    return {
+      for (final r in rows) r['type'] as String: (r['value_cm'] as num).toDouble()
+    };
+  }
+
+  /// Latest logged date per measurement type.
+  Future<Map<String, String>> getLatestMeasurementDates() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT type, MAX(date) AS latest_date FROM body_measurements GROUP BY type
+    ''');
+    return {
+      for (final r in rows) r['type'] as String: r['latest_date'] as String
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> getMeasurementHistory(String type,
+      {String? fromDate}) async {
+    final db = await database;
+    final where = StringBuffer('type = ?');
+    final args = <dynamic>[type];
+    if (fromDate != null) {
+      where.write(' AND date >= ?');
+      args.add(fromDate);
+    }
+    return db.query('body_measurements',
+        where: where.toString(), whereArgs: args, orderBy: 'date ASC');
+  }
+
+  /// All distinct dates that have at least one measurement, newest first.
+  Future<List<String>> getMeasurementDates() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        'SELECT DISTINCT date FROM body_measurements ORDER BY date DESC');
+    return rows.map((r) => r['date'] as String).toList();
+  }
+
   // ─── PROGRESS PHOTOS ────────────────────────────────────────────────────────
 
   Future<List<ProgressPhoto>> getProgressPhotos() async {
@@ -1990,7 +2088,9 @@ class WorkoutDatabase {
 
   /// Generates a human-readable Markdown document containing all user data,
   /// formatted for pasting into any AI chatbot for personalised analysis.
-  Future<String> exportForAI() async {
+  Future<String> exportForAI({Set<String>? categories}) async {
+    // null categories = include everything
+    bool hasCat(String key) => categories == null || categories.contains(key);
     final db = await database;
     final today = _fmt(DateTime.now());
     final sb = StringBuffer();
@@ -2002,253 +2102,325 @@ class WorkoutDatabase {
     sb.writeln();
 
     // ── Overview ──────────────────────────────────────────────────────────────
-    final totalWorkouts = Sqflite.firstIntValue(
-        await db.rawQuery('SELECT COUNT(*) FROM workout_logs WHERE completed = 1')) ?? 0;
-    final totalWorkoutMins = Sqflite.firstIntValue(
-        await db.rawQuery('SELECT SUM(duration_seconds) FROM workout_logs WHERE completed = 1')) ?? 0;
-    final totalVolume = (await db.rawQuery(
-        'SELECT SUM(weight * reps) as v FROM set_logs WHERE weight IS NOT NULL AND reps IS NOT NULL'
-    )).first['v'];
-    final bwCount = Sqflite.firstIntValue(
-        await db.rawQuery('SELECT COUNT(*) FROM body_weight_logs')) ?? 0;
-    final nutritionDays = Sqflite.firstIntValue(
-        await db.rawQuery('SELECT COUNT(*) FROM nutrition_logs')) ?? 0;
-
     sb.writeln('## Overview');
     sb.writeln('| Metric | Value |');
     sb.writeln('|--------|-------|');
-    sb.writeln('| Completed workouts | $totalWorkouts |');
-    sb.writeln('| Total training time | ${(totalWorkoutMins / 60).toStringAsFixed(0)} hours |');
-    if (totalVolume != null) {
-      sb.writeln('| Total volume lifted | ${((totalVolume as num).toDouble() / 1000).toStringAsFixed(1)} tonnes |');
+    if (hasCat('workouts')) {
+      final totalWorkouts = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM workout_logs WHERE completed = 1')) ?? 0;
+      final totalWorkoutMins = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT SUM(duration_seconds) FROM workout_logs WHERE completed = 1')) ?? 0;
+      final totalVolume = (await db.rawQuery(
+          'SELECT SUM(weight * reps) as v FROM set_logs WHERE weight IS NOT NULL AND reps IS NOT NULL'
+      )).first['v'];
+      sb.writeln('| Completed workouts | $totalWorkouts |');
+      sb.writeln('| Total training time | ${(totalWorkoutMins / 60).toStringAsFixed(0)} hours |');
+      if (totalVolume != null) {
+        sb.writeln('| Total volume lifted | ${((totalVolume as num).toDouble() / 1000).toStringAsFixed(1)} tonnes |');
+      }
     }
-    sb.writeln('| Body weight entries | $bwCount |');
-    sb.writeln('| Nutrition days logged | $nutritionDays |');
+    if (hasCat('bodyWeight')) {
+      final bwCount = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM body_weight_logs')) ?? 0;
+      sb.writeln('| Body weight entries | $bwCount |');
+    }
+    if (hasCat('nutrition')) {
+      final nutritionDays = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM nutrition_logs')) ?? 0;
+      sb.writeln('| Nutrition days logged | $nutritionDays |');
+    }
+    if (hasCat('stepLogs')) {
+      final stepDays = Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM step_logs')) ?? 0;
+      sb.writeln('| Step days logged | $stepDays |');
+    }
     sb.writeln();
 
     // ── Nutrition Goals ───────────────────────────────────────────────────────
-    final goals = await db.query('nutrition_goals', limit: 1);
-    if (goals.isNotEmpty) {
-      final g = goals.first;
-      sb.writeln('## Nutrition Goals');
-      sb.writeln('| Calories | Protein | Carbs | Fat |');
-      sb.writeln('|----------|---------|-------|-----|');
-      sb.writeln('| ${(g['calories'] as num).round()} kcal | ${(g['protein_g'] as num).round()} g | ${(g['carbs_g'] as num).round()} g | ${(g['fat_g'] as num).round()} g |');
-      sb.writeln();
+    if (hasCat('nutritionGoals')) {
+      final goals = await db.query('nutrition_goals', limit: 1);
+      if (goals.isNotEmpty) {
+        final g = goals.first;
+        sb.writeln('## Nutrition Goals');
+        sb.writeln('| Calories | Protein | Carbs | Fat |');
+        sb.writeln('|----------|---------|-------|-----|');
+        sb.writeln('| ${(g['calories'] as num).round()} kcal | ${(g['protein_g'] as num).round()} g | ${(g['carbs_g'] as num).round()} g | ${(g['fat_g'] as num).round()} g |');
+        sb.writeln();
+      }
     }
 
     // ── Body Weight ───────────────────────────────────────────────────────────
-    final bwLogs = await db.query('body_weight_logs', orderBy: 'date ASC');
-    if (bwLogs.isNotEmpty) {
-      sb.writeln('## Body Weight Log');
-      final first = bwLogs.first;
-      final last = bwLogs.last;
-      final firstW = (first['weight_kg'] as num).toDouble();
-      final lastW = (last['weight_kg'] as num).toDouble();
-      final diff = lastW - firstW;
-      sb.writeln('**Start:** ${firstW.toStringAsFixed(1)} kg (${first['date']}) → '
-          '**Current:** ${lastW.toStringAsFixed(1)} kg (${last['date']}) | '
-          '**Change:** ${diff >= 0 ? '+' : ''}${diff.toStringAsFixed(1)} kg');
-      sb.writeln();
-      sb.writeln('| Date | Weight (kg) |');
-      sb.writeln('|------|------------|');
-      for (final row in bwLogs) {
-        sb.writeln('| ${row['date']} | ${(row['weight_kg'] as num).toStringAsFixed(1)} |');
+    if (hasCat('bodyWeight')) {
+      final bwLogs = await db.query('body_weight_logs', orderBy: 'date ASC');
+      if (bwLogs.isNotEmpty) {
+        sb.writeln('## Body Weight Log');
+        final first = bwLogs.first;
+        final last = bwLogs.last;
+        final firstW = (first['weight_kg'] as num).toDouble();
+        final lastW = (last['weight_kg'] as num).toDouble();
+        final diff = lastW - firstW;
+        sb.writeln('**Start:** ${firstW.toStringAsFixed(1)} kg (${first['date']}) → '
+            '**Current:** ${lastW.toStringAsFixed(1)} kg (${last['date']}) | '
+            '**Change:** ${diff >= 0 ? '+' : ''}${diff.toStringAsFixed(1)} kg');
+        sb.writeln();
+        sb.writeln('| Date | Weight (kg) |');
+        sb.writeln('|------|------------|');
+        for (final row in bwLogs) {
+          sb.writeln('| ${row['date']} | ${(row['weight_kg'] as num).toStringAsFixed(1)} |');
+        }
+        sb.writeln();
       }
-      sb.writeln();
     }
 
     // ── Exercise Personal Records ─────────────────────────────────────────────
-    final prs = await db.rawQuery('''
-      SELECT ep.best_1rm, ep.date, e.name
-      FROM exercise_prs ep
-      JOIN exercises e ON e.id = ep.exercise_id
-      ORDER BY ep.best_1rm DESC
-    ''');
-    if (prs.isNotEmpty) {
-      sb.writeln('## Personal Records (Best Estimated 1RM)');
-      sb.writeln('| Exercise | Best 1RM (kg) | Date |');
-      sb.writeln('|----------|--------------|------|');
-      for (final pr in prs) {
-        sb.writeln('| ${pr['name']} | ${(pr['best_1rm'] as num).toStringAsFixed(1)} | ${pr['date']} |');
+    if (hasCat('personalRecords')) {
+      final prs = await db.rawQuery('''
+        SELECT ep.best_1rm, ep.date, e.name
+        FROM exercise_prs ep
+        JOIN exercises e ON e.id = ep.exercise_id
+        ORDER BY ep.best_1rm DESC
+      ''');
+      if (prs.isNotEmpty) {
+        sb.writeln('## Personal Records (Best Estimated 1RM)');
+        sb.writeln('| Exercise | Best 1RM (kg) | Date |');
+        sb.writeln('|----------|--------------|------|');
+        for (final pr in prs) {
+          sb.writeln('| ${pr['name']} | ${(pr['best_1rm'] as num).toStringAsFixed(1)} | ${pr['date']} |');
+        }
+        sb.writeln();
       }
-      sb.writeln();
     }
 
     // ── Workout History ───────────────────────────────────────────────────────
-    final wLogs = await db.query('workout_logs', orderBy: 'date DESC');
-    if (wLogs.isNotEmpty) {
-      sb.writeln('## Workout History');
-      for (final wRow in wLogs) {
-        final wId = wRow['id'] as String;
-        final durationMin = wRow['duration_seconds'] != null
-            ? ' · ${((wRow['duration_seconds'] as int) / 60).round()} min'
-            : '';
-        final completed = (wRow['completed'] as int) == 1;
-        sb.writeln('### ${wRow['date']} — ${wRow['workout_name']}$durationMin${completed ? '' : ' (incomplete)'}');
+    if (hasCat('workouts')) {
+      final wLogs = await db.query('workout_logs', orderBy: 'date DESC');
+      if (wLogs.isNotEmpty) {
+        sb.writeln('## Workout History');
+        for (final wRow in wLogs) {
+          final wId = wRow['id'] as String;
+          final durationMin = wRow['duration_seconds'] != null
+              ? ' · ${((wRow['duration_seconds'] as int) / 60).round()} min'
+              : '';
+          final completed = (wRow['completed'] as int) == 1;
+          sb.writeln('### ${wRow['date']} — ${wRow['workout_name']}$durationMin${completed ? '' : ' (incomplete)'}');
 
-        final exLogs = await db.query('exercise_logs',
-            where: 'workout_log_id = ?', whereArgs: [wId], orderBy: 'order_index ASC');
-        for (final exRow in exLogs) {
-          final exId = exRow['exercise_id'] as String;
-          final exData = await db.query('exercises', where: 'id = ?', whereArgs: [exId], limit: 1);
-          final exName = exData.isNotEmpty ? exData.first['name'] as String : exId;
-          final sets = await db.query('set_logs',
-              where: 'exercise_log_id = ?', whereArgs: [exRow['id']], orderBy: 'set_number ASC');
+          final exLogs = await db.query('exercise_logs',
+              where: 'workout_log_id = ?', whereArgs: [wId], orderBy: 'order_index ASC');
+          for (final exRow in exLogs) {
+            final exId = exRow['exercise_id'] as String;
+            final exData = await db.query('exercises', where: 'id = ?', whereArgs: [exId], limit: 1);
+            final exName = exData.isNotEmpty ? exData.first['name'] as String : exId;
+            final sets = await db.query('set_logs',
+                where: 'exercise_log_id = ?', whereArgs: [exRow['id']], orderBy: 'set_number ASC');
 
-          if (sets.isEmpty) {
-            sb.writeln('- **$exName** — no sets logged');
-            continue;
-          }
-
-          // Check if cardio (no weight/reps, has duration)
-          final isCardio = sets.first['weight'] == null && sets.first['duration_seconds'] != null;
-          sb.writeln('- **$exName**');
-          if (isCardio) {
-            for (final s in sets) {
-              final dur = s['duration_seconds'] != null
-                  ? '${((s['duration_seconds'] as int) / 60).round()} min' : '';
-              final dist = s['distance_km'] != null ? ' · ${s['distance_km']} km' : '';
-              final speed = s['speed'] != null ? ' · ${s['speed']} km/h' : '';
-              sb.writeln('  - Set ${s['set_number']}: $dur$dist$speed');
+            if (sets.isEmpty) {
+              sb.writeln('- **$exName** — no sets logged');
+              continue;
             }
-          } else {
-            for (final s in sets) {
-              final w = s['weight'] != null ? '${s['weight']} kg' : '—';
-              final r = s['reps'] != null ? '${s['reps']} reps' : '—';
-              final done = (s['is_completed'] as int? ?? 0) == 1 ? ' ✓' : '';
-              sb.writeln('  - Set ${s['set_number']}: $w × $r$done');
+
+            final isCardio = sets.first['weight'] == null && sets.first['duration_seconds'] != null;
+            sb.writeln('- **$exName**');
+            if (isCardio) {
+              for (final s in sets) {
+                final dur = s['duration_seconds'] != null
+                    ? '${((s['duration_seconds'] as int) / 60).round()} min' : '';
+                final dist = s['distance_km'] != null ? ' · ${s['distance_km']} km' : '';
+                final speed = s['speed'] != null ? ' · ${s['speed']} km/h' : '';
+                sb.writeln('  - Set ${s['set_number']}: $dur$dist$speed');
+              }
+            } else {
+              for (final s in sets) {
+                final w = s['weight'] != null ? '${s['weight']} kg' : '—';
+                final r = s['reps'] != null ? '${s['reps']} reps' : '—';
+                final done = (s['is_completed'] as int? ?? 0) == 1 ? ' ✓' : '';
+                sb.writeln('  - Set ${s['set_number']}: $w × $r$done');
+              }
             }
           }
+          sb.writeln();
         }
-        sb.writeln();
       }
     }
 
     // ── Nutrition ─────────────────────────────────────────────────────────────
-    final nutLogs = await db.query('nutrition_logs', orderBy: 'date DESC');
-    if (nutLogs.isNotEmpty) {
-      // Daily macro summaries
-      sb.writeln('## Nutrition — Daily Summaries');
+    if (hasCat('nutrition')) {
+      final nutLogs = await db.query('nutrition_logs', orderBy: 'date DESC');
+      if (nutLogs.isNotEmpty) {
+        sb.writeln('## Nutrition — Daily Summaries');
+        double sumCal = 0, sumPro = 0, sumCarb = 0, sumFat = 0;
+        final summaryRows = <Map<String, dynamic>>[];
 
-      // Compute averages
-      double sumCal = 0, sumPro = 0, sumCarb = 0, sumFat = 0;
-      final summaryRows = <Map<String, dynamic>>[];
+        for (final nl in nutLogs) {
+          final entries = await db.rawQuery('''
+            SELECT ne.quantity, ne.meal_type,
+                   f.name, f.calories, f.protein_g, f.carbs_g, f.fat_g, f.serving_size
+            FROM nutrition_entries ne
+            JOIN foods f ON f.id = ne.food_id
+            WHERE ne.log_id = ?
+          ''', [nl['id']]);
 
-      for (final nl in nutLogs) {
-        final entries = await db.rawQuery('''
-          SELECT ne.quantity, ne.meal_type,
-                 f.name, f.calories, f.protein_g, f.carbs_g, f.fat_g, f.serving_size
-          FROM nutrition_entries ne
-          JOIN foods f ON f.id = ne.food_id
-          WHERE ne.log_id = ?
-        ''', [nl['id']]);
-
-        double cal = 0, pro = 0, carb = 0, fat = 0;
-        for (final e in entries) {
-          final q = (e['quantity'] as num).toDouble();
-          final s = (e['serving_size'] as num).toDouble();
-          final mult = (q * s) / 100.0;
-          cal += (e['calories'] as num).toDouble() * mult;
-          pro += (e['protein_g'] as num).toDouble() * mult;
-          carb += (e['carbs_g'] as num).toDouble() * mult;
-          fat += (e['fat_g'] as num).toDouble() * mult;
-        }
-        sumCal += cal; sumPro += pro; sumCarb += carb; sumFat += fat;
-        summaryRows.add({
-          'date': nl['date'],
-          'cal': cal, 'pro': pro, 'carb': carb, 'fat': fat,
-          'entries': entries,
-        });
-      }
-
-      final n = nutLogs.length;
-      sb.writeln('**Daily averages over $n days:** '
-          '${(sumCal / n).round()} kcal | Protein ${(sumPro / n).round()} g | '
-          'Carbs ${(sumCarb / n).round()} g | Fat ${(sumFat / n).round()} g');
-      sb.writeln();
-      sb.writeln('| Date | Calories | Protein (g) | Carbs (g) | Fat (g) |');
-      sb.writeln('|------|----------|-------------|-----------|---------|');
-      for (final row in summaryRows) {
-        sb.writeln('| ${row['date']} | ${(row['cal'] as double).round()} | '
-            '${(row['pro'] as double).toStringAsFixed(1)} | '
-            '${(row['carb'] as double).toStringAsFixed(1)} | '
-            '${(row['fat'] as double).toStringAsFixed(1)} |');
-      }
-      sb.writeln();
-
-      // Detailed per-meal food log
-      sb.writeln('## Nutrition — Detailed Food Log');
-      const mealOrder = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
-      for (final row in summaryRows) {
-        sb.writeln('### ${row['date']}');
-        final entries = row['entries'] as List<Map<String, dynamic>>;
-        final byMeal = <String, List<Map<String, dynamic>>>{};
-        for (final e in entries) {
-          (byMeal[e['meal_type'] as String] ??= []).add(e);
-        }
-        for (final meal in mealOrder) {
-          if (!byMeal.containsKey(meal)) continue;
-          sb.writeln('**$meal**');
-          for (final e in byMeal[meal]!) {
+          double cal = 0, pro = 0, carb = 0, fat = 0;
+          for (final e in entries) {
             final q = (e['quantity'] as num).toDouble();
             final s = (e['serving_size'] as num).toDouble();
-            final grams = (q * s).round();
-            final cal = ((e['calories'] as num).toDouble() * q * s / 100).round();
-            final pro = ((e['protein_g'] as num).toDouble() * q * s / 100).toStringAsFixed(1);
-            sb.writeln('- ${e['name']} — ${grams}g · $cal kcal · ${pro}g protein');
+            final mult = (q * s) / 100.0;
+            cal += (e['calories'] as num).toDouble() * mult;
+            pro += (e['protein_g'] as num).toDouble() * mult;
+            carb += (e['carbs_g'] as num).toDouble() * mult;
+            fat += (e['fat_g'] as num).toDouble() * mult;
           }
+          sumCal += cal; sumPro += pro; sumCarb += carb; sumFat += fat;
+          summaryRows.add({
+            'date': nl['date'],
+            'cal': cal, 'pro': pro, 'carb': carb, 'fat': fat,
+            'entries': entries,
+          });
+        }
+
+        final n = nutLogs.length;
+        sb.writeln('**Daily averages over $n days:** '
+            '${(sumCal / n).round()} kcal | Protein ${(sumPro / n).round()} g | '
+            'Carbs ${(sumCarb / n).round()} g | Fat ${(sumFat / n).round()} g');
+        sb.writeln();
+        sb.writeln('| Date | Calories | Protein (g) | Carbs (g) | Fat (g) |');
+        sb.writeln('|------|----------|-------------|-----------|---------|');
+        for (final row in summaryRows) {
+          sb.writeln('| ${row['date']} | ${(row['cal'] as double).round()} | '
+              '${(row['pro'] as double).toStringAsFixed(1)} | '
+              '${(row['carb'] as double).toStringAsFixed(1)} | '
+              '${(row['fat'] as double).toStringAsFixed(1)} |');
+        }
+        sb.writeln();
+
+        sb.writeln('## Nutrition — Detailed Food Log');
+        const mealOrder = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+        for (final row in summaryRows) {
+          sb.writeln('### ${row['date']}');
+          final entries = row['entries'] as List<Map<String, dynamic>>;
+          final byMeal = <String, List<Map<String, dynamic>>>{};
+          for (final e in entries) {
+            (byMeal[e['meal_type'] as String] ??= []).add(e);
+          }
+          for (final meal in mealOrder) {
+            if (!byMeal.containsKey(meal)) continue;
+            sb.writeln('**$meal**');
+            for (final e in byMeal[meal]!) {
+              final q = (e['quantity'] as num).toDouble();
+              final s = (e['serving_size'] as num).toDouble();
+              final grams = (q * s).round();
+              final cal = ((e['calories'] as num).toDouble() * q * s / 100).round();
+              final pro = ((e['protein_g'] as num).toDouble() * q * s / 100).toStringAsFixed(1);
+              sb.writeln('- ${e['name']} — ${grams}g · $cal kcal · ${pro}g protein');
+            }
+          }
+          sb.writeln();
+        }
+      }
+    }
+
+    // ── Water Intake ──────────────────────────────────────────────────────────
+    if (hasCat('water')) {
+      final water = await db.query('water_logs', orderBy: 'date ASC');
+      if (water.isNotEmpty) {
+        sb.writeln('## Water Intake');
+        final avgGlasses = water.fold(0, (s, r) => s + (r['glasses_drunk'] as int)) / water.length;
+        sb.writeln('**Average:** ${avgGlasses.toStringAsFixed(1)} glasses/day '
+            '(${(avgGlasses * 0.25).toStringAsFixed(2)} L/day)');
+        sb.writeln();
+        sb.writeln('| Date | Glasses | Target | Litres |');
+        sb.writeln('|------|---------|--------|--------|');
+        for (final w in water) {
+          final g = w['glasses_drunk'] as int;
+          final t = w['target_glasses'] as int;
+          sb.writeln('| ${w['date']} | $g | $t | ${(g * 0.25).toStringAsFixed(2)} |');
         }
         sb.writeln();
       }
     }
 
-    // ── Water Intake ──────────────────────────────────────────────────────────
-    final water = await db.query('water_logs', orderBy: 'date ASC');
-    if (water.isNotEmpty) {
-      sb.writeln('## Water Intake');
-      final avgGlasses = water.fold(0, (s, r) => s + (r['glasses_drunk'] as int)) / water.length;
-      sb.writeln('**Average:** ${avgGlasses.toStringAsFixed(1)} glasses/day '
-          '(${(avgGlasses * 0.25).toStringAsFixed(2)} L/day)');
-      sb.writeln();
-      sb.writeln('| Date | Glasses | Target | Litres |');
-      sb.writeln('|------|---------|--------|--------|');
-      for (final w in water) {
-        final g = w['glasses_drunk'] as int;
-        final t = w['target_glasses'] as int;
-        sb.writeln('| ${w['date']} | $g | $t | ${(g * 0.25).toStringAsFixed(2)} |');
+    // ── Wellness Log ──────────────────────────────────────────────────────────
+    if (hasCat('wellness')) {
+      final wellness = await db.query('wellness_logs', orderBy: 'date DESC');
+      if (wellness.isNotEmpty) {
+        sb.writeln('## Wellness Log');
+        final avgSleep = wellness.fold(0.0, (s, r) => s + (r['sleep_hours'] as num).toDouble()) / wellness.length;
+        final avgEnergy = wellness.fold(0.0, (s, r) => s + (r['energy'] as int)) / wellness.length;
+        final avgSore = wellness.fold(0.0, (s, r) => s + (r['soreness'] as int)) / wellness.length;
+        sb.writeln('**Averages:** Sleep ${avgSleep.toStringAsFixed(1)} hrs | '
+            'Energy ${avgEnergy.toStringAsFixed(1)}/5 | Soreness ${avgSore.toStringAsFixed(1)}/5');
+        sb.writeln();
+        sb.writeln('| Date | Sleep (hrs) | Energy (1–5) | Soreness (1–5) | Notes |');
+        sb.writeln('|------|-------------|--------------|----------------|-------|');
+        for (final w in wellness) {
+          final notes = (w['notes'] as String? ?? '').replaceAll('|', '/');
+          sb.writeln('| ${w['date']} | ${(w['sleep_hours'] as num).toStringAsFixed(1)} | '
+              '${w['energy']} | ${w['soreness']} | $notes |');
+        }
+        sb.writeln();
       }
-      sb.writeln();
     }
 
-    // ── Wellness Log ──────────────────────────────────────────────────────────
-    final wellness = await db.query('wellness_logs', orderBy: 'date DESC');
-    if (wellness.isNotEmpty) {
-      sb.writeln('## Wellness Log');
-      final avgSleep = wellness.fold(0.0, (s, r) => s + (r['sleep_hours'] as num).toDouble()) / wellness.length;
-      final avgEnergy = wellness.fold(0.0, (s, r) => s + (r['energy'] as int)) / wellness.length;
-      final avgSore = wellness.fold(0.0, (s, r) => s + (r['soreness'] as int)) / wellness.length;
-      sb.writeln('**Averages:** Sleep ${avgSleep.toStringAsFixed(1)} hrs | '
-          'Energy ${avgEnergy.toStringAsFixed(1)}/5 | Soreness ${avgSore.toStringAsFixed(1)}/5');
-      sb.writeln();
-      sb.writeln('| Date | Sleep (hrs) | Energy (1–5) | Soreness (1–5) | Notes |');
-      sb.writeln('|------|-------------|--------------|----------------|-------|');
-      for (final w in wellness) {
-        final notes = (w['notes'] as String? ?? '').replaceAll('|', '/');
-        sb.writeln('| ${w['date']} | ${(w['sleep_hours'] as num).toStringAsFixed(1)} | '
-            '${w['energy']} | ${w['soreness']} | $notes |');
+    // ── Step Logs ─────────────────────────────────────────────────────────────
+    if (hasCat('stepLogs')) {
+      final steps = await db.query('step_logs', orderBy: 'date DESC');
+      if (steps.isNotEmpty) {
+        sb.writeln('## Step Logs');
+        final avgSteps = steps.fold(0, (s, r) => s + (r['steps'] as int)) / steps.length;
+        sb.writeln('**Average:** ${avgSteps.round()} steps/day');
+        sb.writeln();
+        sb.writeln('| Date | Steps | Goal | % of Goal |');
+        sb.writeln('|------|-------|------|-----------|');
+        for (final s in steps) {
+          final stepped = s['steps'] as int;
+          final goal = s['goal'] as int;
+          final pct = goal > 0 ? (stepped * 100 / goal).round() : 0;
+          sb.writeln('| ${s['date']} | $stepped | $goal | $pct% |');
+        }
+        sb.writeln();
       }
-      sb.writeln();
+    }
+
+    // ── Body Measurements ─────────────────────────────────────────────────────
+    if (hasCat('bodyMeasurements')) {
+      final rows = await db.query('body_measurements', orderBy: 'date ASC, type ASC');
+      if (rows.isNotEmpty) {
+        sb.writeln('## Body Measurements (cm)');
+        // Group by type for trend summary
+        final byType = <String, List<Map<String, dynamic>>>{};
+        for (final r in rows) {
+          final t = r['type'] as String;
+          byType.putIfAbsent(t, () => []).add(r);
+        }
+        for (final entry in byType.entries) {
+          final type = entry.key;
+          final history = entry.value;
+          final first = (history.first['value_cm'] as num).toDouble();
+          final last = (history.last['value_cm'] as num).toDouble();
+          final diff = last - first;
+          sb.writeln('### ${type[0].toUpperCase()}${type.substring(1)}');
+          sb.writeln('**First:** ${first.toStringAsFixed(1)} cm (${history.first['date']}) → '
+              '**Latest:** ${last.toStringAsFixed(1)} cm (${history.last['date']}) | '
+              '**Change:** ${diff >= 0 ? '+' : ''}${diff.toStringAsFixed(1)} cm');
+          sb.writeln('| Date | Value (cm) |');
+          sb.writeln('|------|-----------|');
+          for (final r in history) {
+            sb.writeln('| ${r['date']} | ${(r['value_cm'] as num).toStringAsFixed(1)} |');
+          }
+          sb.writeln();
+        }
+      }
     }
 
     // ── Achievements ──────────────────────────────────────────────────────────
-    final ach = await db.query('achievements_unlocked', orderBy: 'unlocked_at ASC');
-    if (ach.isNotEmpty) {
-      sb.writeln('## Achievements Unlocked');
-      for (final a in ach) {
-        sb.writeln('- ${a['achievement_id']} (${(a['unlocked_at'] as String).split('T').first})');
+    if (hasCat('achievements')) {
+      final ach = await db.query('achievements_unlocked', orderBy: 'unlocked_at ASC');
+      if (ach.isNotEmpty) {
+        sb.writeln('## Achievements Unlocked');
+        for (final a in ach) {
+          sb.writeln('- ${a['achievement_id']} (${(a['unlocked_at'] as String).split('T').first})');
+        }
+        sb.writeln();
       }
-      sb.writeln();
     }
 
     // ── Suggested prompts ─────────────────────────────────────────────────────
@@ -2267,28 +2439,36 @@ class WorkoutDatabase {
 
   // ─── FULL BACKUP EXPORT ─────────────────────────────────────────────────────
 
-  /// Exports ALL user-created data as a single JSON string (schema_version: 3).
-  Future<String> exportFullBackup() async {
+  /// Exports user-created data as a single JSON string (schema_version: 3).
+  /// Pass [categories] to limit which data types are included; null = all.
+  Future<String> exportFullBackup({Set<String>? categories}) async {
+    bool hasCat(String key) => categories == null || categories.contains(key);
     final db = await database;
 
     // Custom foods
-    final customFoods = await db.query('foods', where: 'is_custom = ?', whereArgs: [1]);
+    final customFoods = hasCat('customFoods')
+        ? await db.query('foods', where: 'is_custom = ?', whereArgs: [1])
+        : <Map<String, dynamic>>[];
 
     // Custom exercises
-    final customExercises = await db.query('exercises', where: 'is_custom = ?', whereArgs: [1]);
+    final customExercises = hasCat('customExercises')
+        ? await db.query('exercises', where: 'is_custom = ?', whereArgs: [1])
+        : <Map<String, dynamic>>[];
 
     // Workout logs with full exercise/set data
-    final allLogs = await getWorkoutLogsForExport();
-    final exerciseMap = <String, Exercise>{};
-    for (final log in allLogs) {
-      for (final exLog in log.exercises) {
-        if (!exerciseMap.containsKey(exLog.exerciseId)) {
-          final ex = await getExerciseById(exLog.exerciseId);
-          if (ex != null) exerciseMap[exLog.exerciseId] = ex;
+    final workoutsJson = <Map<String, dynamic>>[];
+    if (hasCat('workouts')) {
+      final allLogs = await getWorkoutLogsForExport();
+      final exerciseMap = <String, Exercise>{};
+      for (final log in allLogs) {
+        for (final exLog in log.exercises) {
+          if (!exerciseMap.containsKey(exLog.exerciseId)) {
+            final ex = await getExerciseById(exLog.exerciseId);
+            if (ex != null) exerciseMap[exLog.exerciseId] = ex;
+          }
         }
       }
-    }
-    final workoutsJson = allLogs.map((log) => {
+      workoutsJson.addAll(allLogs.map((log) => {
       'date': log.date,
       'workout_name': log.workoutName,
       'completed': log.completed,
@@ -2313,73 +2493,106 @@ class WorkoutDatabase {
           }).toList(),
         };
       }).toList(),
-    }).toList();
+      }).toList());
+    }
 
     // Nutrition logs + entries (per-meal detail)
-    final nutritionLogRows = await db.query('nutrition_logs');
     final nutritionEntriesList = <Map<String, dynamic>>[];
-    for (final nlRow in nutritionLogRows) {
-      final entries = await db.query('nutrition_entries',
-          where: 'log_id = ?', whereArgs: [nlRow['id']]);
-      for (final entry in entries) {
-        nutritionEntriesList.add({...entry, 'date': nlRow['date']});
+    if (hasCat('nutrition')) {
+      final nutritionLogRows = await db.query('nutrition_logs');
+      for (final nlRow in nutritionLogRows) {
+        final entries = await db.query('nutrition_entries',
+            where: 'log_id = ?', whereArgs: [nlRow['id']]);
+        for (final entry in entries) {
+          nutritionEntriesList.add({...entry, 'date': nlRow['date']});
+        }
       }
     }
 
     // Water logs
-    final waterLogs = await db.query('water_logs');
+    final waterLogs = hasCat('water')
+        ? await db.query('water_logs')
+        : <Map<String, dynamic>>[];
 
     // Meal presets + items
-    final presetRows = await db.query('meal_presets');
     final presetsJson = <Map<String, dynamic>>[];
-    for (final p in presetRows) {
-      final items = await db.query('meal_preset_items',
-          where: 'preset_id = ?', whereArgs: [p['id']]);
-      presetsJson.add({...p, 'items': items.toList()});
+    if (hasCat('mealPresets')) {
+      final presetRows = await db.query('meal_presets');
+      for (final p in presetRows) {
+        final items = await db.query('meal_preset_items',
+            where: 'preset_id = ?', whereArgs: [p['id']]);
+        presetsJson.add({...p, 'items': items.toList()});
+      }
     }
 
     // Body weight logs
-    final bodyWeightLogs = await db.query('body_weight_logs');
+    final bodyWeightLogs = hasCat('bodyWeight')
+        ? await db.query('body_weight_logs')
+        : <Map<String, dynamic>>[];
 
     // Wellness logs
-    final wellnessLogs = await db.query('wellness_logs');
+    final wellnessLogs = hasCat('wellness')
+        ? await db.query('wellness_logs')
+        : <Map<String, dynamic>>[];
 
     // Achievements
-    final achievements = await db.query('achievements_unlocked');
+    final achievements = hasCat('achievements')
+        ? await db.query('achievements_unlocked')
+        : <Map<String, dynamic>>[];
 
     // Exercise PRs (include exercise name for portability)
-    final prs = await db.rawQuery('''
-      SELECT ep.exercise_id, ep.best_1rm, ep.date, e.name AS exercise_name
-      FROM exercise_prs ep
-      LEFT JOIN exercises e ON e.id = ep.exercise_id
-    ''');
+    final prs = hasCat('personalRecords')
+        ? await db.rawQuery('''
+            SELECT ep.exercise_id, ep.best_1rm, ep.date, e.name AS exercise_name
+            FROM exercise_prs ep
+            LEFT JOIN exercises e ON e.id = ep.exercise_id
+          ''')
+        : <Map<String, dynamic>>[];
 
     // Nutrition goals
-    final nutritionGoals = await db.query('nutrition_goals');
+    final nutritionGoals = hasCat('nutritionGoals')
+        ? await db.query('nutrition_goals')
+        : <Map<String, dynamic>>[];
 
     // Day overrides
-    final dayOverrides = await db.query('day_overrides');
+    final dayOverrides = hasCat('dayOverrides')
+        ? await db.query('day_overrides')
+        : <Map<String, dynamic>>[];
 
     // Quick start templates
-    final quickStartTemplates = await db.query('quick_start_templates');
+    final quickStartTemplates = hasCat('quickStart')
+        ? await db.query('quick_start_templates')
+        : <Map<String, dynamic>>[];
+
+    // Step logs
+    final stepLogs = hasCat('stepLogs')
+        ? await db.query('step_logs', orderBy: 'date ASC')
+        : <Map<String, dynamic>>[];
+
+    // Body measurements
+    final bodyMeasurements = hasCat('bodyMeasurements')
+        ? await db.query('body_measurements', orderBy: 'date ASC, type ASC')
+        : <Map<String, dynamic>>[];
 
     final payload = <String, dynamic>{
       'app': 'aawara',
       'schema_version': 3,
       'exported_at': DateTime.now().toIso8601String(),
-      'custom_foods': customFoods.toList(),
-      'custom_exercises': customExercises.toList(),
-      'workout_logs': workoutsJson,
-      'body_weight_logs': bodyWeightLogs.toList(),
-      'nutrition_logs': nutritionEntriesList,
-      'water_logs': waterLogs.toList(),
-      'meal_presets': presetsJson,
-      'wellness_logs': wellnessLogs.toList(),
-      'achievements': achievements.toList(),
-      'exercise_prs': prs.toList(),
-      'nutrition_goals': nutritionGoals.toList(),
-      'day_overrides': dayOverrides.toList(),
-      'quick_start_templates': quickStartTemplates.toList(),
+      if (customFoods.isNotEmpty) 'custom_foods': customFoods.toList(),
+      if (customExercises.isNotEmpty) 'custom_exercises': customExercises.toList(),
+      if (workoutsJson.isNotEmpty) 'workout_logs': workoutsJson,
+      if (bodyWeightLogs.isNotEmpty) 'body_weight_logs': bodyWeightLogs.toList(),
+      if (nutritionEntriesList.isNotEmpty) 'nutrition_logs': nutritionEntriesList,
+      if (waterLogs.isNotEmpty) 'water_logs': waterLogs.toList(),
+      if (presetsJson.isNotEmpty) 'meal_presets': presetsJson,
+      if (wellnessLogs.isNotEmpty) 'wellness_logs': wellnessLogs.toList(),
+      if (achievements.isNotEmpty) 'achievements': achievements.toList(),
+      if (prs.isNotEmpty) 'exercise_prs': prs.toList(),
+      if (nutritionGoals.isNotEmpty) 'nutrition_goals': nutritionGoals.toList(),
+      if (dayOverrides.isNotEmpty) 'day_overrides': dayOverrides.toList(),
+      if (quickStartTemplates.isNotEmpty) 'quick_start_templates': quickStartTemplates.toList(),
+      if (stepLogs.isNotEmpty) 'step_logs': stepLogs.toList(),
+      if (bodyMeasurements.isNotEmpty) 'body_measurements': bodyMeasurements.toList(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
   }
