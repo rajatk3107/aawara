@@ -41,6 +41,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // Accordion: which exercise is currently expanded
   String? _expandedId;
 
+  // Plateau alerts — exerciseId set for O(1) lookup
+  final Set<String> _plateauedIds = {};
+
   // Exercises that have already shown the overload nudge this session
   final Set<String> _nudgedExercises = {};
 
@@ -182,6 +185,16 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
     }
     if (mounted) setState(() => _loading = false);
+
+    // Load plateau data in background — failure is silent
+    _db.getPlateauedExercises().then((alerts) {
+      if (!mounted) return;
+      setState(() {
+        _plateauedIds
+          ..clear()
+          ..addAll(alerts.map((a) => a.exerciseId));
+      });
+    }).catchError((_) {});
   }
 
   String get _durationStr {
@@ -1121,13 +1134,41 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          ex?.name ?? 'Unknown Exercise',
-                          style: TextStyle(
-                            color: isExpanded ? Colors.white : const Color(0xFFCCCCDD),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                ex?.name ?? 'Unknown Exercise',
+                                style: TextStyle(
+                                  color: isExpanded ? Colors.white : const Color(0xFFCCCCDD),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (_plateauedIds.contains(exLog.exerciseId)) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEF9F27).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: const Color(0xFFEF9F27).withValues(alpha: 0.4)),
+                                ),
+                                child: const Text(
+                                  '⚠ Plateau',
+                                  style: TextStyle(
+                                    color: Color(0xFFEF9F27),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         Text(
                           '${ex?.muscleGroup ?? ''} · ${exLog.sets.length} set${exLog.sets.length == 1 ? '' : 's'}${isCardio ? ' · Cardio' : ''}',

@@ -10,6 +10,7 @@ import 'body_measurements_screen.dart';
 import 'exercise_progress_screen.dart';
 import 'progress_photos_screen.dart';
 import 'step_goal_screen.dart';
+import '../widgets/plateau_banner.dart';
 import '../../nutrition/models/nutrition_models.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
@@ -306,7 +307,8 @@ class _ProgressScreenState extends State<ProgressScreen>
         _buildHeatmapFilterChips(),
         const SizedBox(height: 8),
         WorkoutHeatmap(months: _heatmapMonths),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
+        const PlateauBanner(),
         _buildSectionHeader('Strength Progress'),
         const SizedBox(height: 12),
         _buildExercisePicker(),

@@ -4,6 +4,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/exercise.dart';
+import '../models/plateau_alert.dart';
 import '../models/progress_photo.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
@@ -1376,6 +1377,126 @@ class WorkoutDatabase {
       GROUP BY wl.date
       ORDER BY wl.date ASC
     ''', args);
+  }
+
+  /// Returns exercises where the peak estimated 1RM has not improved for 3+
+  /// consecutive calendar weeks across the last 6 logged sessions.
+  Future<List<PlateauAlert>> getPlateauedExercises() async {
+    final db = await database;
+
+    // Exercises logged in at least 3 completed sessions
+    final exRows = await db.rawQuery('''
+      SELECT el.exercise_id
+      FROM exercise_logs el
+      INNER JOIN workout_logs wl ON el.workout_log_id = wl.id
+      WHERE wl.completed = 1
+      GROUP BY el.exercise_id
+      HAVING COUNT(DISTINCT wl.id) >= 3
+    ''');
+
+    final alerts = <PlateauAlert>[];
+
+    for (final exRow in exRows) {
+      final exerciseId = exRow['exercise_id'] as String;
+
+      // Best estimated 1RM (Epley: w*(1+r/30)) per session — last 6 sessions
+      final sessions = await db.rawQuery('''
+        SELECT wl.date,
+               MAX(sl.weight * (1.0 + COALESCE(sl.reps, 1) / 30.0)) AS best_1rm
+        FROM set_logs sl
+        INNER JOIN exercise_logs el ON sl.exercise_log_id = el.id
+        INNER JOIN workout_logs wl  ON el.workout_log_id  = wl.id
+        WHERE el.exercise_id = ?
+          AND sl.weight IS NOT NULL
+          AND sl.weight > 0
+          AND sl.is_completed = 1
+          AND wl.completed = 1
+        GROUP BY wl.id
+        ORDER BY wl.date DESC
+        LIMIT 6
+      ''', [exerciseId]);
+
+      if (sessions.length < 3) continue;
+
+      // Group by calendar week (keyed by Monday's date string)
+      final weekBest = <String, double>{};
+      for (final s in sessions) {
+        final date = DateTime.parse(s['date'] as String);
+        final key = _weekKey(date);
+        final orm = (s['best_1rm'] as num).toDouble();
+        if (orm > (weekBest[key] ?? 0)) weekBest[key] = orm;
+      }
+
+      if (weekBest.length < 3) continue;
+
+      final weeks = weekBest.keys.toList()..sort();
+      final vals = weeks.map((w) => weekBest[w]!).toList();
+
+      // Find the last week where a meaningful new peak (+0.5%) was achieved
+      double runMax = 0;
+      int lastImprovementIdx = 0;
+      for (int i = 0; i < vals.length; i++) {
+        if (vals[i] > runMax * 1.005) {
+          runMax = vals[i];
+          lastImprovementIdx = i;
+        }
+      }
+
+      final stagnantWeeks = vals.length - lastImprovementIdx;
+      if (stagnantWeeks < 3) continue;
+
+      final exMeta = await db.query('exercises',
+          where: 'id = ?', whereArgs: [exerciseId], limit: 1);
+      if (exMeta.isEmpty) continue;
+
+      final exName = exMeta.first['name'] as String;
+      final muscleGroup = exMeta.first['muscle_group'] as String;
+
+      alerts.add(PlateauAlert(
+        exerciseId: exerciseId,
+        exerciseName: exName,
+        muscleGroup: muscleGroup,
+        current1RM: runMax,
+        weeksStagnant: stagnantWeeks,
+        suggestion: _plateauSuggestion(exName, muscleGroup),
+      ));
+    }
+
+    alerts.sort((a, b) => b.weeksStagnant.compareTo(a.weeksStagnant));
+    return alerts;
+  }
+
+  // Monday-keyed week string, e.g. "2025-04-14"
+  String _weekKey(DateTime date) {
+    final monday = date.subtract(Duration(days: date.weekday - 1));
+    return '${monday.year}-${monday.month.toString().padLeft(2, '0')}-${monday.day.toString().padLeft(2, '0')}';
+  }
+
+  String _plateauSuggestion(String name, String muscleGroup) {
+    final n = name.toLowerCase();
+    // Compound lifts
+    if (n.contains('bench') ||
+        n.contains('squat') ||
+        n.contains('deadlift') ||
+        n.contains('overhead press') ||
+        n.contains('ohp') ||
+        (n.contains('row') && muscleGroup == 'Back') ||
+        n.contains('pull-up') ||
+        n.contains('pullup')) {
+      return 'Try a deload week at 60% weight, then reset';
+    }
+    // Isolation lifts
+    if (n.contains('curl') ||
+        n.contains('extension') ||
+        n.contains('lateral') ||
+        n.contains('raise') ||
+        n.contains('fly') ||
+        n.contains('flye') ||
+        n.contains('kickback') ||
+        n.contains('pulldown')) {
+      return 'Try increasing reps before adding weight, or swap variation';
+    }
+    return 'Consider changing rep range or taking a rest day before next session';
   }
 
   /// Looks up exercises by exact name (case-insensitive). Used by Quick Start.
