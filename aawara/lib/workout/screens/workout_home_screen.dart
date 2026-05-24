@@ -62,6 +62,9 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
   // Water
   WaterLog? _todayWater;
 
+  // Rest day override for the selected date
+  bool _isMarkedRest = false;
+
   bool _loading = true;
 
   String get _dateStr {
@@ -135,6 +138,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _proteinGoalG = nutGoals.proteinG;
           _calorieGoalKcal = nutGoals.calories;
           _todayWater = waterLog;
+          _isMarkedRest = prefs.getBool('rest_day_$_dateStr') ?? false;
           _loading = false;
         });
 
@@ -406,6 +410,27 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                 ),
               ],
             ],
+            const Divider(color: Color(0xFF1E1E35), height: 24),
+            _OptionTile(
+              icon: _isMarkedRest
+                  ? Icons.fitness_center_rounded
+                  : Icons.self_improvement_rounded,
+              label: _isMarkedRest ? 'Remove Rest Day Mark' : 'Mark as Rest Day',
+              subtitle: _isMarkedRest
+                  ? 'Resume tracking workouts for this day'
+                  : 'Mark this day as rest — no workout logged',
+              color: const Color(0xFF3498DB),
+              onTap: () async {
+                Navigator.pop(context);
+                final prefs = await SharedPreferences.getInstance();
+                if (_isMarkedRest) {
+                  await prefs.remove('rest_day_$_dateStr');
+                } else {
+                  await prefs.setBool('rest_day_$_dateStr', true);
+                }
+                _load();
+              },
+            ),
           ],
         ),
       ),
@@ -765,6 +790,87 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     final allCompleted = hasAnySessions && !isInProgress;
     final sessionCount = _dayLogs.length;
     final lastLog = _dayLogs.isEmpty ? null : _dayLogs.last;
+
+    if (_isMarkedRest) {
+      return Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF12121F),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: const Color(0xFF3498DB).withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3498DB).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.self_improvement_rounded,
+                    color: Color(0xFF3498DB), size: 26),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3498DB),
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      child: const Text(
+                        'REST DAY',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.6),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Rest & Recovery',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: -0.3),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Take it easy — your muscles are rebuilding',
+                      style: TextStyle(color: Color(0xFF555577), fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: _showDayOptions,
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1A2E),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF2A2A45)),
+                  ),
+                  child: const Icon(Icons.more_horiz_rounded,
+                      color: Colors.white38, size: 18),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Container(
       decoration: BoxDecoration(
