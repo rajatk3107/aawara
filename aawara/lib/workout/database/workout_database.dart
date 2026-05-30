@@ -2376,7 +2376,7 @@ class WorkoutDatabase {
             }
             final exNote = exRow['notes'] as String?;
             if (exNote != null && exNote.isNotEmpty) {
-              sb.writeln('  - _Note: $exNote_');
+              sb.writeln('  - _Note: $exNote');
             }
           }
           sb.writeln();

@@ -113,14 +113,14 @@ class _StepCounterCardState extends State<StepCounterCard> {
   }
 
   Future<void> _addStepsManually() async {
-    final ctrl = TextEditingController();
-    final added = await showDialog<int>(
+    final ctrl = TextEditingController(text: _steps > 0 ? '$_steps' : '');
+    final updated = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1A1A2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text(
-          'Add Steps',
+          'Update Steps',
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         content: Column(
@@ -128,7 +128,7 @@ class _StepCounterCardState extends State<StepCounterCard> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Steps walked without your phone',
+              'Set today\'s final step count',
               style: TextStyle(color: Color(0xFF888899), fontSize: 13),
             ),
             const SizedBox(height: 12),
@@ -147,11 +147,11 @@ class _StepCounterCardState extends State<StepCounterCard> {
                 hintStyle: TextStyle(color: Color(0xFF444466)),
               ),
             ),
-            if (_manualSteps > 0)
+            if (_manualSteps != 0)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  'Already added today: ${_formatSteps(_manualSteps)} steps',
+                  'Manual correction active',
                   style: const TextStyle(
                       color: Color(0xFF555577), fontSize: 12),
                 ),
@@ -176,18 +176,23 @@ class _StepCounterCardState extends State<StepCounterCard> {
                   borderRadius: BorderRadius.circular(10)),
               elevation: 0,
             ),
-            child: const Text('Add',
+            child: const Text('Update',
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
     ctrl.dispose();
-    if (added != null && added > 0) {
-      await StepTrackingService.addManualSteps(added);
+    if (updated != null && updated >= 0) {
+      await StepTrackingService.setManualStepCount(updated);
       final steps = await StepTrackingService.getTodaySteps();
       final manual = await StepTrackingService.getManualStepsAdded();
-      if (mounted) setState(() { _steps = steps; _manualSteps = manual; });
+      if (mounted) {
+        setState(() {
+          _steps = steps;
+          _manualSteps = manual;
+        });
+      }
     }
   }
 
@@ -271,14 +276,14 @@ class _StepCounterCardState extends State<StepCounterCard> {
               child: Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: _manualSteps > 0
+                  color: _manualSteps != 0
                       ? const Color(0xFFFFD700).withValues(alpha: 0.10)
                       : const Color(0xFF2A2A45),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   Icons.edit_rounded,
-                  color: _manualSteps > 0
+                  color: _manualSteps != 0
                       ? const Color(0xFFFFD700)
                       : const Color(0xFFAAAAAA),
                   size: 15,
@@ -384,12 +389,12 @@ class _StepCounterCardState extends State<StepCounterCard> {
                     Text('~$cal kcal',
                         style: const TextStyle(
                             color: Color(0xFF555577), fontSize: 12)),
-                    if (_manualSteps > 0) ...[
+                    if (_manualSteps != 0) ...[
                       const Text('  ·  ',
                           style: TextStyle(
                               color: Color(0xFF333355), fontSize: 12)),
-                      Text('+${_formatSteps(_manualSteps)} manual',
-                          style: const TextStyle(
+                      const Text('manual edit',
+                          style: TextStyle(
                               color: Color(0xFFFFD700), fontSize: 11)),
                     ],
                     const Spacer(),

@@ -89,31 +89,55 @@ class StepTrackingService {
   }
 
   static Future<int> getTodaySteps() async {
-    final manualAdd = await getManualStepsAdded();
+    final manualAdjustment = await getManualStepsAdded();
     if (Platform.isIOS) {
-      return await _getIosSteps() + manualAdd;
+      final automatic = await _getIosSteps();
+      return (automatic + manualAdjustment).clamp(0, 1 << 31).toInt();
     }
     // Android — read latest value from DB (background service writes it)
     final today = _todayDate();
     final row = await WorkoutDatabase.instance.getStepLog(today);
     final automatic = row != null ? (row['steps'] as num).toInt() : 0;
-    return automatic + manualAdd;
+    return (automatic + manualAdjustment).clamp(0, 1 << 31).toInt();
   }
 
-  // Returns the manually added step offset for today.
+  // Returns the manual correction applied to today's automatic step count.
   static Future<int> getManualStepsAdded() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt('step_manual_add_${_todayDate()}') ?? 0;
   }
 
-  // Adds steps the user walked without their phone. Cumulative within a day.
+  // Sets today's displayed total. Internally this is stored as the correction
+  // needed on top of the automatic count so future sensor updates keep moving.
+  static Future<void> setManualStepCount(int finalSteps) async {
+    if (finalSteps < 0) return;
+    final prefs = await SharedPreferences.getInstance();
+    final automatic = await _getAutomaticTodaySteps();
+    final key = 'step_manual_add_${_todayDate()}';
+    await prefs.setInt(key, finalSteps - automatic);
+    if (Platform.isAndroid) {
+      FlutterBackgroundService().invoke('manualStepUpdate', {
+        'steps': finalSteps,
+        'goal': prefs.getInt('step_goal') ?? 8000,
+      });
+      // Android: background service handles the stream update via stepUpdate event.
+      // Calling refreshStream() here too would cause a duplicate emission.
+    } else {
+      await refreshStream();
+    }
+  }
+
+  // Backwards-compatible wrapper for any older call sites.
   static Future<void> addManualSteps(int steps) async {
     if (steps <= 0) return;
-    final prefs = await SharedPreferences.getInstance();
-    final key = 'step_manual_add_${_todayDate()}';
-    final existing = prefs.getInt(key) ?? 0;
-    await prefs.setInt(key, existing + steps);
-    await refreshStream();
+    final current = await getTodaySteps();
+    await setManualStepCount(current + steps);
+  }
+
+  static Future<int> _getAutomaticTodaySteps() async {
+    if (Platform.isIOS) return _getIosSteps();
+    final row = await WorkoutDatabase.instance.getStepLog(_todayDate());
+    return row != null ? (row['steps'] as num).toInt() : 0;
   }
 
   // Called on every app resume to ensure the Android service is running
@@ -130,16 +154,23 @@ class StepTrackingService {
     if (!await isEnabled()) return;
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
-    var steps = await getTodaySteps();
-    if (Platform.isIOS && steps > 0) {
-      await WorkoutDatabase.instance.upsertStepLog(_todayDate(), steps, goal);
+    final manualAdjustment = await getManualStepsAdded();
+    var automatic = await _getAutomaticTodaySteps();
+    var steps = (automatic + manualAdjustment).clamp(0, 1 << 31).toInt();
+    if (Platform.isIOS && automatic > 0) {
+      await WorkoutDatabase.instance.upsertStepLog(_todayDate(), automatic, goal);
     }
     if (Platform.isAndroid) {
       // Silently merge Health Connect steps (includes Samsung Watch data)
       final hcSteps = await _getHealthConnectStepsForDay(DateTime.now());
-      if (hcSteps > steps) {
-        steps = hcSteps;
-        await WorkoutDatabase.instance.upsertStepLog(_todayDate(), steps, goal);
+      if (hcSteps > automatic) {
+        automatic = hcSteps;
+        await WorkoutDatabase.instance.upsertStepLog(
+          _todayDate(),
+          automatic,
+          goal,
+        );
+        steps = (automatic + manualAdjustment).clamp(0, 1 << 31).toInt();
       }
     }
     _stepController.add(StepUpdate(steps: steps, goal: goal));
@@ -225,15 +256,15 @@ class StepTrackingService {
 
   // ── Android ──────────────────────────────────────────────────────────────
 
-  // Wire up the UI stream listener — includes manual offset on top of pedometer count.
+  // Wire up the UI stream listener. Android service updates already include
+  // the manual correction used by the foreground notification.
   static void _listenToAndroidUpdates() {
     FlutterBackgroundService().on('stepUpdate').listen((data) async {
       if (data == null) return;
-      final automatic = (data['steps'] as num?)?.toInt() ?? 0;
+      final steps = (data['steps'] as num?)?.toInt() ?? 0;
       final goal = (data['goal'] as num?)?.toInt() ?? 8000;
-      final manualAdd = await getManualStepsAdded();
       _stepController.add(StepUpdate(
-        steps: automatic + manualAdd,
+        steps: steps,
         goal: goal,
       ));
     });
@@ -299,10 +330,37 @@ class StepTrackingService {
   static Future<void> _onAndroidServiceStart(ServiceInstance service) async {
     final prefs = await SharedPreferences.getInstance();
     int? midnightBaseline;
+    int latestAutomaticSteps = 0;
+    final androidService =
+        service is AndroidServiceInstance ? service : null;
 
-    if (service is AndroidServiceInstance) {
-      service.setAsForegroundService();
+    Future<void> updateForegroundNotification(int steps, int goal) async {
+      if (androidService != null) {
+        androidService.setForegroundNotificationInfo(
+          title: 'Aawara · $steps steps today',
+          content: steps >= goal
+              ? 'Daily goal reached!'
+              : '${goal - steps} steps to your goal',
+        );
+      }
     }
+
+    if (androidService != null) {
+      androidService.setAsForegroundService();
+    }
+
+    service.on('manualStepUpdate').listen((data) async {
+      final goal = (data?['goal'] as num?)?.toInt() ??
+          prefs.getInt('step_goal') ??
+          8000;
+      final providedSteps = (data?['steps'] as num?)?.toInt();
+      final manualAdjustment =
+          prefs.getInt('step_manual_add_${_todayDate()}') ?? 0;
+      final adjustedSteps = providedSteps ??
+          (latestAutomaticSteps + manualAdjustment).clamp(0, 1 << 31).toInt();
+      await updateForegroundNotification(adjustedSteps, goal);
+      service.invoke('stepUpdate', {'steps': adjustedSteps, 'goal': goal});
+    });
 
     // Listen to hardware pedometer
     Pedometer.stepCountStream.listen((StepCount event) async {
@@ -324,32 +382,31 @@ class StepTrackingService {
       }
 
       final todaySteps = totalSinceBoot - midnightBaseline!;
+      latestAutomaticSteps = todaySteps;
+      // Reload so manual corrections written by the UI isolate are visible here.
+      await prefs.reload();
+      final manualAdjustment = prefs.getInt('step_manual_add_$today') ?? 0;
+      final adjustedSteps =
+          (todaySteps + manualAdjustment).clamp(0, 1 << 31).toInt();
 
       // Persist to SQLite
       await WorkoutDatabase.instance.upsertStepLog(today, todaySteps, goal);
 
       // Update foreground notification
-      if (service is AndroidServiceInstance) {
-        service.setForegroundNotificationInfo(
-          title: 'Aawara · $todaySteps steps today',
-          content: todaySteps >= goal
-              ? 'Daily goal reached!'
-              : '${goal - todaySteps} steps to your goal',
-        );
-      }
+      await updateForegroundNotification(adjustedSteps, goal);
 
       // Fire goal notification once per day
       final notifiedKey = 'step_goal_notified_$today';
       final notifyEnabled = prefs.getBool('step_notify_goal') ?? true;
-      if (todaySteps >= goal &&
+      if (adjustedSteps >= goal &&
           notifyEnabled &&
           !(prefs.getBool(notifiedKey) ?? false)) {
         await prefs.setBool(notifiedKey, true);
-        _fireGoalNotification(todaySteps, goal);
+        _fireGoalNotification(adjustedSteps, goal);
       }
 
       // Push to UI
-      service.invoke('stepUpdate', {'steps': todaySteps, 'goal': goal});
+      service.invoke('stepUpdate', {'steps': adjustedSteps, 'goal': goal});
     });
 
     // Midnight cleanup
