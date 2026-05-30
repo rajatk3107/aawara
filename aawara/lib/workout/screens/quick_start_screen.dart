@@ -98,6 +98,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
   late String _workoutName;
   late List<Exercise> _exercises;
   bool _loading = false;
+  Set<String> _savedPresets = {};
 
   @override
   void initState() {
@@ -110,6 +111,15 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
       _step = 1;
       _workoutName = '';
       _exercises = [];
+    }
+    _loadSavedPresets();
+  }
+
+  Future<void> _loadSavedPresets() async {
+    final db = await _db.database;
+    final rows = await db.query('quick_start_templates', columns: ['name']);
+    if (mounted) {
+      setState(() => _savedPresets = rows.map((r) => r['name'] as String).toSet());
     }
   }
 
@@ -136,9 +146,10 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
     await _db.saveQuickStartTemplate(
         _workoutName, _exercises.map((e) => e.id).toList());
     if (mounted) {
+      setState(() => _savedPresets.add(_workoutName));
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('$_workoutName saved as default'),
+          content: Text('$_workoutName saved — will load your custom list next time'),
           backgroundColor: const Color(0xFF1A1A2E),
           behavior: SnackBarBehavior.floating,
         ),
@@ -148,7 +159,15 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
 
   Future<void> _pickMuscleGroup(String label, List<String> groups) async {
     setState(() => _loading = true);
-    final found = await _db.getExercisesByMuscleGroups(groups, limit: 6);
+    List<Exercise> found;
+    final savedIds = await _db.getQuickStartTemplate(label);
+    if (savedIds != null && savedIds.isNotEmpty) {
+      final loaded = await Future.wait(savedIds.map(_db.getExerciseById));
+      found = loaded.whereType<Exercise>().toList();
+      if (found.isEmpty) found = await _db.getExercisesByMuscleGroups(groups, limit: 6);
+    } else {
+      found = await _db.getExercisesByMuscleGroups(groups, limit: 6);
+    }
     setState(() {
       _workoutName = label;
       _exercises = found;
@@ -160,8 +179,9 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
   Future<void> _startWorkout() async {
     if (_exercises.isEmpty) return;
     setState(() => _loading = true);
-    // Auto-save any edits to the PPL template so next launch uses the new list
-    if (_kPplPresets.containsKey(_workoutName)) {
+    // Auto-save edits for any named preset so next launch uses the customised list
+    final allPresetNames = {..._kPplPresets.keys, ..._kMuscleGroups.keys};
+    if (allPresetNames.contains(_workoutName)) {
       await _db.saveQuickStartTemplate(
           _workoutName, _exercises.map((e) => e.id).toList());
     }
@@ -171,7 +191,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
       date: widget.targetDate,
       workoutName: _workoutName,
     );
-    final created = await _db.createOrGetWorkoutLog(log);
+    final created = await _db.createWorkoutLog(log);
     for (int i = 0; i < _exercises.length; i++) {
       await _db.createExerciseLog(ExerciseLog(
         id: uuid.v4(),
@@ -180,7 +200,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
         orderIndex: i,
       ));
     }
-    final fullLog = await _db.getWorkoutLogForDate(widget.targetDate);
+    final fullLog = await _db.getWorkoutLogById(created.id);
     setState(() => _loading = false);
     if (fullLog != null && mounted) {
       Navigator.pushReplacement(
@@ -236,15 +256,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
           _step == 1 ? 'Quick Start' : _workoutName,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        actions: _step == 2 && _kPplPresets.containsKey(_workoutName)
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.bookmark_outline_rounded),
-                  tooltip: 'Save as default for $_workoutName',
-                  onPressed: _saveTemplate,
-                ),
-              ]
-            : null,
+        actions: null,
       ),
       body: _loading
           ? const Center(
@@ -277,6 +289,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
                     count: e.value.length,
                     color: _pplColor(e.key),
                     icon: _pplIcon(e.key),
+                    isSaved: _savedPresets.contains(e.key),
                     onTap: () => _pickPreset(e.key, e.value),
                   ))
               .toList(),
@@ -294,6 +307,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
           children: _kMuscleGroups.entries
               .map((e) => _MgCard(
                     label: e.key,
+                    isSaved: _savedPresets.contains(e.key),
                     onTap: () => _pickMuscleGroup(e.key, e.value),
                   ))
               .toList(),
@@ -343,9 +357,18 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
             children: [
               const Icon(Icons.info_outline, color: Colors.white38, size: 14),
               const SizedBox(width: 6),
-              const Text(
-                'Drag to reorder · swipe left to remove',
-                style: TextStyle(color: Colors.white38, fontSize: 12),
+              Expanded(
+                child: Text(
+                  _savedPresets.contains(_workoutName)
+                      ? 'Custom saved · drag to reorder · swipe left to remove'
+                      : 'Drag to reorder · swipe left to remove · Save to keep edits',
+                  style: TextStyle(
+                    color: _savedPresets.contains(_workoutName)
+                        ? const Color(0xFF2ECC71).withValues(alpha: 0.7)
+                        : Colors.white38,
+                    fontSize: 12,
+                  ),
+                ),
               ),
             ],
           ),
@@ -433,6 +456,10 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
   }
 
   Widget _buildBottomBar() {
+    final allPresetNames = {..._kPplPresets.keys, ..._kMuscleGroups.keys};
+    final isNamedPreset = allPresetNames.contains(_workoutName);
+    final isSaved = _savedPresets.contains(_workoutName);
+
     return Container(
       padding: EdgeInsets.fromLTRB(
           16, 12, 16, 12 + MediaQuery.of(context).padding.bottom),
@@ -442,35 +469,66 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
           top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
         ),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          OutlinedButton.icon(
-            onPressed: _addExercise,
-            icon: const Icon(Icons.add, color: Color(0xFFFFD700), size: 18),
-            label: const Text('Add',
-                style: TextStyle(color: Color(0xFFFFD700))),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0xFFFFD700)),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _exercises.isEmpty ? null : _startWorkout,
-              icon: const Icon(Icons.play_arrow, color: Colors.black),
-              label: const Text(
-                'Start Workout',
-                style: TextStyle(
-                    color: Colors.black, fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: _addExercise,
+                icon: const Icon(Icons.add, color: Color(0xFFFFD700), size: 18),
+                label: const Text('Add',
+                    style: TextStyle(color: Color(0xFFFFD700))),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFFFD700)),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                ),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFFD700),
-                disabledBackgroundColor: Colors.white12,
-                padding: const EdgeInsets.symmetric(vertical: 13),
+              if (isNamedPreset) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _exercises.isEmpty ? null : _saveTemplate,
+                  icon: Icon(
+                    isSaved ? Icons.bookmark_rounded : Icons.bookmark_outline_rounded,
+                    color: isSaved ? const Color(0xFF2ECC71) : Colors.white54,
+                    size: 18,
+                  ),
+                  label: Text(
+                    isSaved ? 'Saved' : 'Save',
+                    style: TextStyle(
+                      color: isSaved ? const Color(0xFF2ECC71) : Colors.white54,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: isSaved
+                          ? const Color(0xFF2ECC71).withValues(alpha: 0.5)
+                          : Colors.white24,
+                    ),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _exercises.isEmpty ? null : _startWorkout,
+                  icon: const Icon(Icons.play_arrow, color: Colors.black),
+                  label: const Text(
+                    'Start Workout',
+                    style: TextStyle(
+                        color: Colors.black, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFD700),
+                    disabledBackgroundColor: Colors.white12,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
         ],
       ),
@@ -485,6 +543,7 @@ class _PplCard extends StatelessWidget {
   final int count;
   final Color color;
   final IconData icon;
+  final bool isSaved;
   final VoidCallback onTap;
 
   const _PplCard({
@@ -492,6 +551,7 @@ class _PplCard extends StatelessWidget {
     required this.count,
     required this.color,
     required this.icon,
+    required this.isSaved,
     required this.onTap,
   });
 
@@ -512,15 +572,29 @@ class _PplCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, color: color, size: 22),
+              Row(
+                children: [
+                  Icon(icon, color: color, size: 22),
+                  if (isSaved) ...[
+                    const Spacer(),
+                    const Icon(Icons.bookmark_rounded,
+                        color: Color(0xFF2ECC71), size: 14),
+                  ],
+                ],
+              ),
               const Spacer(),
               Text(label,
                   style: TextStyle(
                       color: color,
                       fontWeight: FontWeight.bold,
                       fontSize: 15)),
-              Text('$count exercises',
-                  style: const TextStyle(color: Colors.white54, fontSize: 11)),
+              Text(
+                isSaved ? 'Custom saved' : '$count exercises',
+                style: TextStyle(
+                  color: isSaved ? const Color(0xFF2ECC71) : Colors.white54,
+                  fontSize: 11,
+                ),
+              ),
             ],
           ),
         ),
@@ -533,9 +607,10 @@ class _PplCard extends StatelessWidget {
 
 class _MgCard extends StatelessWidget {
   final String label;
+  final bool isSaved;
   final VoidCallback onTap;
 
-  const _MgCard({required this.label, required this.onTap});
+  const _MgCard({required this.label, required this.isSaved, required this.onTap});
 
   static const _icons = <String, IconData>{
     'Chest': Icons.fitness_center,
@@ -562,24 +637,35 @@ class _MgCard extends StatelessWidget {
             border: Border.all(
                 color: const Color(0xFFFFD700).withValues(alpha: 0.2)),
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Stack(
             children: [
-              Icon(
-                _icons[label] ?? Icons.fitness_center,
-                color: const Color(0xFFFFD700),
-                size: 22,
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _icons[label] ?? Icons.fitness_center,
+                    color: const Color(0xFFFFD700),
+                    size: 22,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w500,
+              if (isSaved)
+                const Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Icon(Icons.bookmark_rounded,
+                      color: Color(0xFF2ECC71), size: 12),
                 ),
-                textAlign: TextAlign.center,
-              ),
             ],
           ),
         ),

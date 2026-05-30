@@ -69,44 +69,57 @@ class _ImportScreenState extends State<ImportScreen> {
       return;
     }
 
-    // Step 4: run import inside a result
+    // Step 4: run import
     try {
-      final (:imported, :skipped) =
-          await WorkoutDatabase.instance.importFromJson(jsonStr);
+      final schemaVersion = parsed['schema_version'] as int? ?? 1;
 
-      // Also import body_weight_logs if present
-      int bwImported = 0;
-      int bwSkipped = 0;
-      final bwLogs = (parsed['body_weight_logs'] as List? ?? [])
-          .cast<Map<String, dynamic>>();
-      for (final bw in bwLogs) {
-        final date = bw['date'] as String? ?? '';
-        final weightKg =
-            (bw['weight_kg'] as num?)?.toDouble();
-        if (date.isEmpty || weightKg == null) {
-          bwSkipped++;
-          continue;
+      if (schemaVersion >= 3) {
+        // Full backup — use the comprehensive import method
+        final counts = await WorkoutDatabase.instance.importFullBackup(jsonStr);
+        if (mounted) {
+          setState(() {
+            _importing = false;
+            _result = _ImportResult.fromFullBackup(counts);
+          });
         }
-        final existing = await WorkoutDatabase.instance
-            .getBodyWeightLogs(fromDate: date, toDate: date);
-        if (existing.isNotEmpty) {
-          bwSkipped++;
-        } else {
-          await WorkoutDatabase.instance.logBodyWeight(date, weightKg);
-          bwImported++;
-        }
-      }
+      } else {
+        // Legacy workout-only export
+        final (:imported, :skipped) =
+            await WorkoutDatabase.instance.importFromJson(jsonStr);
 
-      if (mounted) {
-        setState(() {
-          _importing = false;
-          _result = _ImportResult(
-            workoutsImported: imported,
-            workoutsSkipped: skipped,
-            bwImported: bwImported,
-            bwSkipped: bwSkipped,
-          );
-        });
+        int bwImported = 0;
+        int bwSkipped = 0;
+        final bwLogs = (parsed['body_weight_logs'] as List? ?? [])
+            .cast<Map<String, dynamic>>();
+        for (final bw in bwLogs) {
+          final date = bw['date'] as String? ?? '';
+          final weightKg = (bw['weight_kg'] as num?)?.toDouble();
+          if (date.isEmpty || weightKg == null) {
+            bwSkipped++;
+            continue;
+          }
+          final existing = await WorkoutDatabase.instance
+              .getBodyWeightLogs(fromDate: date, toDate: date);
+          if (existing.isNotEmpty) {
+            bwSkipped++;
+          } else {
+            await WorkoutDatabase.instance.logBodyWeight(date, weightKg);
+            bwImported++;
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _importing = false;
+            _result = _ImportResult(
+              isFullBackup: false,
+              rows: {
+                'Workouts': (imported: imported, skipped: skipped),
+                'Body weight entries': (imported: bwImported, skipped: bwSkipped),
+              },
+            );
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -128,10 +141,10 @@ class _ImportScreenState extends State<ImportScreen> {
                 color: Colors.white, fontWeight: FontWeight.bold)),
         content: const Text(
           'This will merge imported data with your existing data.\n\n'
-          '• Workouts with the same date will be skipped\n'
-          '• Body weight entries on existing dates will be skipped\n'
-          '• Exercises are matched by name and shared\n\n'
-          'Your current data will not be deleted. Continue?',
+          '• Existing entries are never overwritten or deleted\n'
+          '• Duplicate dates/IDs are skipped automatically\n'
+          '• Full backups restore workouts, nutrition, water, custom foods, wellness & more\n\n'
+          'Continue?',
           style: TextStyle(color: Color(0xFFCCCCDD), height: 1.6),
         ),
         actions: [
@@ -229,13 +242,11 @@ class _ImportScreenState extends State<ImportScreen> {
                   ),
                   const SizedBox(height: 10),
                   _infoRow(Icons.check_circle_outline_rounded,
-                      'Workouts not on existing dates are imported'),
+                      'Full backups restore workouts, nutrition, water logs, custom foods, meal presets, wellness & more'),
                   _infoRow(Icons.check_circle_outline_rounded,
-                      'Body weight logs on new dates are imported'),
-                  _infoRow(Icons.check_circle_outline_rounded,
-                      'Exercises matched by name — no duplicates'),
+                      'Exercises and foods matched by name — no duplicates'),
                   _infoRow(Icons.info_outline_rounded,
-                      'Workouts on duplicate dates are skipped'),
+                      'Entries on duplicate dates / existing IDs are skipped'),
                 ],
               ),
             ),
@@ -306,7 +317,8 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Widget _buildResultCard(_ImportResult r) {
-    final hasData = r.workoutsImported > 0 || r.bwImported > 0;
+    final totalImported = r.rows.values.fold(0, (s, v) => s + v.imported);
+    final hasData = totalImported > 0;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -333,25 +345,28 @@ class _ImportScreenState extends State<ImportScreen> {
                 size: 20,
               ),
               const SizedBox(width: 8),
-              Text(
-                hasData ? 'Import Complete' : 'Nothing New to Import',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold),
+              Expanded(
+                child: Text(
+                  hasData
+                      ? r.isFullBackup
+                          ? 'Full Backup Restored'
+                          : 'Import Complete'
+                      : 'Nothing New to Import',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold),
+                ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          _resultRow('Workouts imported', r.workoutsImported),
-          if (r.workoutsSkipped > 0)
-            _resultRow('Workouts skipped (duplicate date)',
-                r.workoutsSkipped, dim: true),
-          if (r.bwImported > 0)
-            _resultRow('Body weight entries imported', r.bwImported),
-          if (r.bwSkipped > 0)
-            _resultRow('Body weight entries skipped', r.bwSkipped,
-                dim: true),
+          for (final entry in r.rows.entries) ...[
+            if (entry.value.imported > 0)
+              _resultRow('${entry.key} imported', entry.value.imported),
+            if (entry.value.skipped > 0)
+              _resultRow('${entry.key} skipped', entry.value.skipped, dim: true),
+          ],
         ],
       ),
     );
@@ -363,12 +378,14 @@ class _ImportScreenState extends State<ImportScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: TextStyle(
-                  color: dim
-                      ? const Color(0xFF555577)
-                      : const Color(0xFF888899),
-                  fontSize: 13)),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    color: dim
+                        ? const Color(0xFF555577)
+                        : const Color(0xFF888899),
+                    fontSize: 13)),
+          ),
           Text('$count',
               style: TextStyle(
                   color: dim
@@ -383,15 +400,37 @@ class _ImportScreenState extends State<ImportScreen> {
 }
 
 class _ImportResult {
-  final int workoutsImported;
-  final int workoutsSkipped;
-  final int bwImported;
-  final int bwSkipped;
+  final bool isFullBackup;
+  final Map<String, ({int imported, int skipped})> rows;
 
   const _ImportResult({
-    required this.workoutsImported,
-    required this.workoutsSkipped,
-    required this.bwImported,
-    required this.bwSkipped,
+    required this.isFullBackup,
+    required this.rows,
   });
+
+  factory _ImportResult.fromFullBackup(
+      Map<String, ({int imported, int skipped})> counts) {
+    const labels = {
+      'custom_exercises': 'Custom exercises',
+      'custom_foods': 'Custom foods',
+      'workout_logs': 'Workouts',
+      'body_weight_logs': 'Body weight entries',
+      'nutrition_logs': 'Nutrition entries',
+      'water_logs': 'Water logs',
+      'meal_presets': 'Meal presets',
+      'wellness_logs': 'Wellness logs',
+      'achievements': 'Achievements',
+      'exercise_prs': 'Exercise PRs',
+      'nutrition_goals': 'Nutrition goals',
+      'day_overrides': 'Day overrides',
+      'quick_start_templates': 'Quick start templates',
+    };
+    final rows = <String, ({int imported, int skipped})>{};
+    for (final k in labels.keys) {
+      if (counts.containsKey(k)) {
+        rows[labels[k]!] = counts[k]!;
+      }
+    }
+    return _ImportResult(isFullBackup: true, rows: rows);
+  }
 }

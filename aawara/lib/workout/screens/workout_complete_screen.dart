@@ -587,7 +587,7 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
   Widget _buildBottomBar() {
     return Container(
       padding: EdgeInsets.fromLTRB(
-          20, 12, 20, MediaQuery.of(context).padding.bottom + 12),
+          16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
@@ -636,6 +636,34 @@ class _WorkoutCompleteScreenState extends State<WorkoutCompleteScreen>
                                   fontSize: 14)),
                         ],
                       ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          // Add Session button
+          Expanded(
+            flex: 2,
+            child: GestureDetector(
+              onTap: () => Navigator.pop(context, 'add_session'),
+              child: Container(
+                height: 52,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF3498DB).withValues(alpha: 0.5)),
+                  color: const Color(0xFF3498DB).withValues(alpha: 0.1),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.add_rounded, color: Color(0xFF3498DB), size: 18),
+                    SizedBox(width: 6),
+                    Text('Add Session',
+                        style: TextStyle(
+                            color: Color(0xFF3498DB),
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14)),
+                  ],
+                ),
               ),
             ),
           ),

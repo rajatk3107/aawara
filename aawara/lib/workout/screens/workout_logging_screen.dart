@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
+import '../../utils/safe_navigation.dart';
 import 'workout_complete_screen.dart';
+import 'quick_start_screen.dart';
 
 class WorkoutLoggingScreen extends StatefulWidget {
   final WorkoutLog workoutLog;
@@ -38,6 +41,12 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // Accordion: which exercise is currently expanded
   String? _expandedId;
 
+  // Plateau alerts — exerciseId set for O(1) lookup
+  final Set<String> _plateauedIds = {};
+
+  // Per-exercise note controllers (keyed by exerciseLog.id)
+  final Map<String, TextEditingController> _noteControllers = {};
+
   // Exercises that have already shown the overload nudge this session
   final Set<String> _nudgedExercises = {};
 
@@ -48,6 +57,10 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   Timer? _restTimer;
   int _restRemaining = 0;
   int _restTotal = 90;
+  int _restDefault = 90; // loaded from prefs, user-configurable
+  bool _restExpanded = false;
+  bool _restDone = false;
+  final Map<String, int> _exerciseRestOverrides = {};
 
   @override
   void initState() {
@@ -59,14 +72,69 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       // View mode — show stored duration, no running timer
       _elapsedSeconds = _log.durationSeconds ?? 0;
     } else {
-      // Active workout — anchor start time to wall clock
-      _workoutStartTime = DateTime.now();
-      _startDurationTimer();
       if (_log.exercises.isNotEmpty) {
         _expandedId = _log.exercises.first.id;
       }
+      _initTimer();
+      _loadRestDefault();
     }
     _loadDetails();
+  }
+
+  // Load persisted timer state so the timer survives screen pops/pushes.
+  Future<void> _initTimer() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final savedMs = prefs.getInt('wl_start_${_log.id}');
+    final savedPausedElapsed = prefs.getInt('wl_paused_elapsed_${_log.id}');
+    if (savedMs != null) {
+      _workoutStartTime = DateTime.fromMillisecondsSinceEpoch(savedMs);
+      if (savedPausedElapsed != null) {
+        setState(() {
+          _paused = true;
+          _elapsedAtPause = savedPausedElapsed;
+          _elapsedSeconds = savedPausedElapsed;
+        });
+      } else {
+        _startDurationTimer();
+      }
+    } else {
+      _workoutStartTime = DateTime.now();
+      prefs.setInt('wl_start_${_log.id}', _workoutStartTime!.millisecondsSinceEpoch);
+      _startDurationTimer();
+    }
+  }
+
+  // Fire-and-forget: persist current timer anchor so we can resume after a pop.
+  void _saveTimerState() {
+    if (_log.completed || _workoutStartTime == null) return;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setInt('wl_start_${_log.id}', _workoutStartTime!.millisecondsSinceEpoch);
+      if (_paused) {
+        prefs.setInt('wl_paused_elapsed_${_log.id}', _elapsedAtPause);
+      } else {
+        prefs.remove('wl_paused_elapsed_${_log.id}');
+      }
+    });
+  }
+
+  void _clearTimerState() {
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('wl_start_${_log.id}');
+      prefs.remove('wl_paused_elapsed_${_log.id}');
+    });
+  }
+
+  Future<void> _loadRestDefault() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() => _restDefault = prefs.getInt('rest_default_seconds') ?? 90);
+  }
+
+  Future<void> _saveRestDefault(int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('rest_default_seconds', seconds);
+    setState(() => _restDefault = seconds);
   }
 
   @override
@@ -74,10 +142,13 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _restTimer?.cancel();
+    _saveTimerState();
+    for (final c in _noteControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
-  // Restart timer from wall clock whenever app comes back to foreground
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_log.completed || _workoutStartTime == null) return;
@@ -85,6 +156,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       _startDurationTimer();
     } else if (state == AppLifecycleState.paused) {
       _durationTimer?.cancel();
+      _saveTimerState();
     }
   }
 
@@ -101,9 +173,15 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   Future<void> _loadDetails() async {
     setState(() => _loading = true);
+    final prefs = await SharedPreferences.getInstance();
     for (final exLog in _log.exercises) {
       final ex = await _db.getExerciseById(exLog.exerciseId);
       if (ex != null) _exercises[exLog.id] = ex;
+
+      _noteControllers.putIfAbsent(
+        exLog.id,
+        () => TextEditingController(text: exLog.notes ?? ''),
+      );
 
       // Build hint from last session
       final prev = await _db.getLastSetsForExercise(exLog.exerciseId);
@@ -113,8 +191,21 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
         }
       }
+
+      final override = prefs.getInt('rest_timer_${exLog.exerciseId}');
+      if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
     }
     if (mounted) setState(() => _loading = false);
+
+    // Load plateau data in background — failure is silent
+    _db.getPlateauedExercises().then((alerts) {
+      if (!mounted) return;
+      setState(() {
+        _plateauedIds
+          ..clear()
+          ..addAll(alerts.map((a) => a.exerciseId));
+      });
+    }).catchError((_) {});
   }
 
   String get _durationStr {
@@ -141,28 +232,227 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   // ─── Rest Timer ───────────────────────────────────────────────────────────────
 
-  void _startRest(int seconds) {
+  void _startRest(int seconds, {String? exerciseId}) {
     _restTimer?.cancel();
     setState(() {
       _restRemaining = seconds;
       _restTotal = seconds;
+      _restDone = false;
+      _restExpanded = false;
     });
     _restTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
+      final next = _restRemaining - 1;
       setState(() {
-        if (_restRemaining > 0) {
-          _restRemaining--;
-          if (_restRemaining == 0) HapticFeedback.mediumImpact();
-        } else {
-          t.cancel();
-        }
+        _restRemaining = next < 0 ? 0 : next;
+        if (next <= 0) _restDone = true;
       });
+      if (next <= 0) {
+        t.cancel();
+        HapticFeedback.heavyImpact();
+        Future.delayed(const Duration(milliseconds: 200), HapticFeedback.heavyImpact);
+        Future.delayed(const Duration(milliseconds: 400), HapticFeedback.heavyImpact);
+        Future.delayed(const Duration(seconds: 1), () {
+          if (mounted) _cancelRest();
+        });
+      }
     });
   }
 
   void _cancelRest() {
     _restTimer?.cancel();
-    setState(() => _restRemaining = 0);
+    setState(() {
+      _restRemaining = 0;
+      _restDone = false;
+      _restExpanded = false;
+    });
+  }
+
+  int _getRestSeconds(String exerciseId) =>
+      _exerciseRestOverrides[exerciseId] ?? _restDefault;
+
+  String _fmtRestTime(int seconds) {
+    if (seconds >= 60) {
+      final m = seconds ~/ 60;
+      final s = seconds % 60;
+      return s > 0 ? '${m}m ${s}s' : '${m}m';
+    }
+    return '${seconds}s';
+  }
+
+  Future<void> _saveExerciseRest(String exerciseId, int seconds) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('rest_timer_$exerciseId', seconds);
+    if (mounted) setState(() => _exerciseRestOverrides[exerciseId] = seconds);
+  }
+
+  Future<void> _clearExerciseRest(String exerciseId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('rest_timer_$exerciseId');
+    if (mounted) setState(() => _exerciseRestOverrides.remove(exerciseId));
+  }
+
+  void _showExerciseRestPicker(ExerciseLog exLog) {
+    const options = [60, 90, 120, 180, 240];
+    final exerciseId = exLog.exerciseId;
+    final current = _exerciseRestOverrides[exerciseId];
+    final exName = _exercises[exLog.id]?.name ?? 'Exercise';
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Rest Timer · $exName',
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Custom rest for this exercise across all sessions.',
+              style: TextStyle(color: Color(0xFF555577), fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                ...options.map((s) {
+                  final label = _fmtRestTime(s);
+                  final selected = s == current;
+                  return GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _saveExerciseRest(exerciseId, s);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+                            : const Color(0xFF0D0D1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: selected
+                              ? const Color(0xFFFFD700)
+                              : const Color(0xFF1E1E35),
+                        ),
+                      ),
+                      child: Text(label,
+                          style: TextStyle(
+                              color: selected
+                                  ? const Color(0xFFFFD700)
+                                  : const Color(0xFFCCCCDD),
+                              fontWeight: selected
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                              fontSize: 14)),
+                    ),
+                  );
+                }),
+                if (current != null)
+                  GestureDetector(
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await _clearExerciseRest(exerciseId);
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0D0D1A),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                            color:
+                                const Color(0xFFE74C3C).withValues(alpha: 0.4)),
+                      ),
+                      child: const Text('Use default',
+                          style: TextStyle(
+                              color: Color(0xFFE74C3C), fontSize: 14)),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRestDurationPicker() {
+    const options = [30, 45, 60, 90, 120, 180, 240];
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Default Rest Time',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            const Text('Long-press the rest bar to change anytime.',
+                style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: options.map((s) {
+                final label =
+                    s >= 60 ? '${s ~/ 60}m${s % 60 > 0 ? ' ${s % 60}s' : ''}' : '${s}s';
+                final selected = s == _restDefault;
+                return GestureDetector(
+                  onTap: () {
+                    _saveRestDefault(s);
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFF3498DB).withValues(alpha: 0.15)
+                          : const Color(0xFF0D0D1A),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? const Color(0xFF3498DB)
+                            : const Color(0xFF1E1E35),
+                      ),
+                    ),
+                    child: Text(label,
+                        style: TextStyle(
+                            color: selected
+                                ? const Color(0xFF3498DB)
+                                : const Color(0xFFCCCCDD),
+                            fontWeight: selected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            fontSize: 14)),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ─── Set actions ──────────────────────────────────────────────────────────────
@@ -176,7 +466,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       if (idx >= 0) exLog.sets[idx] = updated;
     });
     if (next && !_log.completed) {
-      _startRest(90);
+      _startRest(_getRestSeconds(exLog.exerciseId), exerciseId: exLog.exerciseId);
       _checkPR(exLog, updated);
       _checkOverloadNudge(exLog);
     }
@@ -369,6 +659,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     );
     if (confirmed == true) {
       await _db.deleteExerciseLog(exLog.id);
+      _noteControllers.remove(exLog.id)?.dispose();
       setState(() {
         _log.exercises.removeWhere((e) => e.id == exLog.id);
         if (_expandedId == exLog.id) {
@@ -393,6 +684,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     );
     await _db.createExerciseLog(exLog);
     _exercises[exLog.id] = picked;
+    _noteControllers[exLog.id] = TextEditingController();
     final prev = await _db.getLastSetsForExercise(picked.id);
     if (prev.isNotEmpty && !picked.isCardio) {
       final s = prev.first;
@@ -400,6 +692,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
       }
     }
+    final prefs = await SharedPreferences.getInstance();
+    final override = prefs.getInt('rest_timer_${picked.id}');
+    if (override != null) _exerciseRestOverrides[picked.id] = override;
     setState(() {
       _log.exercises.add(exLog);
       _expandedId = exLog.id;
@@ -437,11 +732,12 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       return;
     }
     _durationTimer?.cancel();
+    _clearTimerState();
     final updated = _log.copyWith(completed: true, durationSeconds: _elapsedSeconds);
     await _db.updateWorkoutLog(updated);
     setState(() => _log = updated);
     if (!mounted) return;
-    await Navigator.push(
+    final result = await Navigator.push<String>(
       context,
       MaterialPageRoute(
         builder: (_) => WorkoutCompleteScreen(
@@ -451,6 +747,16 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         ),
       ),
     );
+    if (result == 'add_session' && mounted) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => QuickStartScreen(targetDate: _log.date),
+        ),
+      );
+    } else if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _undoComplete() async {
@@ -492,11 +798,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
+          TextButton(onPressed: () => popAfterFocusSettles(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
             onPressed: () {
               final v = double.tryParse(ctrl.text);
-              Navigator.pop(ctx, v);
+              popAfterFocusSettles(ctx, v);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),
@@ -552,12 +858,12 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
+          TextButton(onPressed: () => popAfterFocusSettles(ctx), child: const Text('Cancel', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
             onPressed: () {
               final m = int.tryParse(mmCtrl.text) ?? 0;
               final s = int.tryParse(ssCtrl.text) ?? 0;
-              Navigator.pop(ctx, m * 60 + s);
+              popAfterFocusSettles(ctx, m * 60 + s);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFFFD700),
@@ -595,6 +901,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
+      resizeToAvoidBottomInset: false,
       body: Column(
         children: [
           _buildHeader(),
@@ -636,7 +943,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_restRemaining > 0) _buildRestTimer(),
+            if (_restRemaining > 0 || _restDone) _buildRestTimer(),
             _buildBottomBar(),
           ],
         ),
@@ -707,6 +1014,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                       _durationTimer?.cancel();
                     }
                   });
+                  _saveTimerState();
                 },
               )
             else
@@ -784,6 +1092,8 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                 : () => setState(() {
                       _expandedId = isExpanded ? null : exLog.id;
                     }),
+            onLongPress:
+                _log.completed ? null : () => _showExerciseRestPicker(exLog),
             behavior: HitTestBehavior.opaque,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(10, 12, 10, 12),
@@ -837,18 +1147,88 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          ex?.name ?? 'Unknown Exercise',
-                          style: TextStyle(
-                            color: isExpanded ? Colors.white : const Color(0xFFCCCCDD),
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                ex?.name ?? 'Unknown Exercise',
+                                style: TextStyle(
+                                  color: isExpanded ? Colors.white : const Color(0xFFCCCCDD),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (_plateauedIds.contains(exLog.exerciseId)) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 5, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFEF9F27).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: const Color(0xFFEF9F27).withValues(alpha: 0.4)),
+                                ),
+                                child: const Text(
+                                  '⚠ Plateau',
+                                  style: TextStyle(
+                                    color: Color(0xFFEF9F27),
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                         Text(
                           '${ex?.muscleGroup ?? ''} · ${exLog.sets.length} set${exLog.sets.length == 1 ? '' : 's'}${isCardio ? ' · Cardio' : ''}',
                           style: const TextStyle(color: Color(0xFF555577), fontSize: 11),
                         ),
+                        if (_exerciseRestOverrides
+                            .containsKey(exLog.exerciseId))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.timer_outlined,
+                                    color: Color(0xFF887744), size: 9),
+                                const SizedBox(width: 2),
+                                Text(
+                                  _fmtRestTime(_exerciseRestOverrides[
+                                      exLog.exerciseId]!),
+                                  style: const TextStyle(
+                                      color: Color(0xFF887744),
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.w600),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (!isExpanded && (exLog.notes?.isNotEmpty ?? false))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.notes_rounded,
+                                    color: Color(0xFF5577AA), size: 9),
+                                const SizedBox(width: 3),
+                                Flexible(
+                                  child: Text(
+                                    exLog.notes!,
+                                    style: const TextStyle(
+                                        color: Color(0xFF5577AA),
+                                        fontSize: 10),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -934,11 +1314,93 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
             if (!_log.completed)
               _buildAddSetBtn(exLog),
 
+            // Exercise note
+            _buildExerciseNote(exLog),
+
             const SizedBox(height: 4),
           ],
         ],
       ),
     );
+  }
+
+  Widget _buildExerciseNote(ExerciseLog exLog) {
+    final ctrl = _noteControllers[exLog.id];
+    if (ctrl == null) return const SizedBox.shrink();
+    final isReadOnly = _log.completed;
+
+    if (isReadOnly) {
+      if (exLog.notes == null || exLog.notes!.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.notes_rounded, color: Color(0xFF5577AA), size: 13),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                exLog.notes!,
+                style: const TextStyle(color: Color(0xFF8899BB), fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+      child: TextField(
+        controller: ctrl,
+        style: const TextStyle(color: Colors.white70, fontSize: 12),
+        maxLines: null,
+        keyboardType: TextInputType.multiline,
+        textCapitalization: TextCapitalization.sentences,
+        onChanged: (_) => setState(() {}),
+        onEditingComplete: () => _saveNote(exLog, ctrl.text),
+        onTapOutside: (_) {
+          FocusScope.of(context).unfocus();
+          _saveNote(exLog, ctrl.text);
+        },
+        decoration: InputDecoration(
+          hintText: 'Add a note for this exercise…',
+          hintStyle: const TextStyle(color: Color(0xFF333355), fontSize: 12),
+          prefixIcon: const Padding(
+            padding: EdgeInsets.only(left: 10, right: 6),
+            child: Icon(Icons.notes_rounded, color: Color(0xFF444466), size: 14),
+          ),
+          prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+          filled: true,
+          fillColor: const Color(0xFF0D0D1A),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(
+                color: Color(0xFF5577AA), width: 1),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveNote(ExerciseLog exLog, String text) async {
+    final note = text.trim().isEmpty ? null : text.trim();
+    if (note == exLog.notes) return;
+    await _db.updateExerciseLogNote(exLog.id, note);
+    final idx = _log.exercises.indexWhere((e) => e.id == exLog.id);
+    if (idx != -1 && mounted) {
+      setState(() {
+        _log = _log.copyWith(
+          exercises: List.from(_log.exercises)
+            ..[idx] = exLog.copyWith(notes: note),
+        );
+      });
+    }
   }
 
   // ─── Strength set row ─────────────────────────────────────────────────────────
@@ -1422,85 +1884,113 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     final progress = _restTotal > 0 ? _restRemaining / _restTotal : 0.0;
     final mins = _restRemaining ~/ 60;
     final secs = _restRemaining % 60;
-    final timeStr = mins > 0 ? '$mins:${secs.toString().padLeft(2, '0')}' : '${secs}s';
-    final done = _restRemaining == 0;
+    final timeStr =
+        mins > 0 ? '$mins:${secs.toString().padLeft(2, '0')}' : '${secs}s';
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: done
-              ? const Color(0xFF2ECC71).withValues(alpha: 0.5)
-              : const Color(0xFF3498DB).withValues(alpha: 0.3),
+    return GestureDetector(
+      onTap:
+          _restDone ? null : () => setState(() => _restExpanded = !_restExpanded),
+      onLongPress: _restDone ? null : _showRestDurationPicker,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          color: _restDone
+              ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+              : const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: _restDone
+                ? const Color(0xFFFFD700).withValues(alpha: 0.5)
+                : const Color(0xFF2A2A45),
+          ),
         ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              Icon(
-                done ? Icons.check_circle_outline : Icons.timer_outlined,
-                color: done ? const Color(0xFF2ECC71) : const Color(0xFF3498DB),
-                size: 15,
-              ),
-              const SizedBox(width: 7),
-              Text(
-                done ? 'Rest done — go!' : 'Rest',
-                style: TextStyle(
-                  color: done ? const Color(0xFF2ECC71) : Colors.white54,
-                  fontSize: 12,
-                ),
-              ),
-              const Spacer(),
-              if (!done) ...[
-                Text(timeStr,
-                    style: const TextStyle(
-                        color: Color(0xFF3498DB),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15)),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: () => _startRest(_restRemaining + 30),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3498DB).withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text('+30s',
-                        style: TextStyle(
-                            color: Color(0xFF3498DB),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600)),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Text('💤', style: TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
+                const Text('Rest',
+                    style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500)),
+                const SizedBox(width: 8),
+                Text(
+                  _restDone ? 'Done!' : timeStr,
+                  style: const TextStyle(
+                    color: Color(0xFFFFD700),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 10),
+                if (!_restDone)
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 4,
+                        backgroundColor: const Color(0xFF2A2A45),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          progress > 0.35
+                              ? const Color(0xFFFFD700).withValues(alpha: 0.7)
+                              : const Color(0xFFE74C3C),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  const Spacer(),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: _cancelRest,
+                  behavior: HitTestBehavior.opaque,
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      'Skip',
+                      style: TextStyle(
+                        color: _restDone
+                            ? const Color(0xFFFFD700)
+                            : const Color(0xFF555577),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
               ],
-              GestureDetector(
-                onTap: _cancelRest,
-                child: const Icon(Icons.close, color: Colors.white24, size: 15),
+            ),
+            if (_restExpanded && !_restDone) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _RestNudgeBtn(
+                    label: '−15s',
+                    onTap: () => setState(() {
+                      _restRemaining = (_restRemaining - 15).clamp(5, 9999);
+                    }),
+                  ),
+                  const SizedBox(width: 16),
+                  _RestNudgeBtn(
+                    label: '+15s',
+                    onTap: () => setState(() {
+                      _restRemaining += 15;
+                      _restTotal += 15;
+                    }),
+                  ),
+                ],
               ),
             ],
-          ),
-          if (!done) ...[
-            const SizedBox(height: 5),
-            LinearProgressIndicator(
-              value: progress,
-              backgroundColor: const Color(0xFF0D0D1A),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                progress > 0.5
-                    ? const Color(0xFF3498DB)
-                    : const Color(0xFFF39C12),
-              ),
-              borderRadius: BorderRadius.circular(4),
-              minHeight: 2,
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -1643,6 +2133,32 @@ class _ReadOnlyValue extends StatelessWidget {
         text,
         textAlign: TextAlign.center,
         style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 13),
+      );
+}
+
+// ─── Rest nudge button ────────────────────────────────────────────────────────
+
+class _RestNudgeBtn extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _RestNudgeBtn({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D1A),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFF2A2A45)),
+          ),
+          child: Text(label,
+              style: const TextStyle(
+                  color: Color(0xFFCCCCDD),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600)),
+        ),
       );
 }
 

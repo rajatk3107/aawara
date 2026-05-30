@@ -4,14 +4,17 @@ import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image_cropper/image_cropper.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'privacy_policy_screen.dart';
 import 'services/notification_service.dart';
+import 'services/step_tracking_service.dart';
 import 'workout/database/workout_database.dart';
 import 'workout/models/workout_plan_day.dart';
 import 'workout/screens/export_screen.dart';
 import 'workout/screens/import_screen.dart';
 import 'workout/screens/monthly_summary_screen.dart';
+import 'workout/screens/step_goal_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -33,6 +36,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   List<WorkoutPlanDay> _workoutDays = [];
   Map<int, bool> _reminderEnabled = {};
   Map<int, TimeOfDay> _reminderTimes = {};
+
+  // Step tracking
+  bool _stepEnabled = false;
+  int _stepGoal = 8000;
+  bool _stepNotify = true;
+  bool _stepShowHome = true;
+  bool _batteryTipShown = false;
+  bool _hcSyncing = false;
+  String? _hcSyncResult;
 
   @override
   void initState() {
@@ -71,6 +83,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _workoutDays = workoutDays;
       _reminderEnabled = enabled;
       _reminderTimes = times;
+      _stepEnabled = prefs.getBool('step_tracking_enabled') ?? false;
+      _stepGoal = prefs.getInt('step_goal') ?? 8000;
+      _stepNotify = prefs.getBool('step_notify_goal') ?? true;
+      _stepShowHome = prefs.getBool('step_show_home') ?? true;
+      _batteryTipShown = prefs.getBool('battery_tip_shown') ?? false;
     });
   }
 
@@ -321,6 +338,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildRemindersCard(),
           const SizedBox(height: 24),
 
+          // ── Step Tracking ─────────────────────────────────────────────
+          _sectionHeader('Step Tracking'),
+          _buildStepTrackingCard(),
+          const SizedBox(height: 24),
+
           // ── App ───────────────────────────────────────────────────────
           _sectionHeader('App'),
           _buildCard([
@@ -353,6 +375,394 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildStepTrackingCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A2E),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF1E1E35)),
+      ),
+      child: Column(
+        children: [
+          // Enable toggle
+          Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFD700).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.directions_walk_rounded,
+                      color: Color(0xFFFFD700), size: 18),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text('Track steps automatically',
+                      style: TextStyle(color: Colors.white, fontSize: 15)),
+                ),
+                Switch(
+                  value: _stepEnabled,
+                  onChanged: _toggleStepTracking,
+                  activeThumbColor: const Color(0xFFFFD700),
+                  activeTrackColor:
+                      const Color(0xFFFFD700).withValues(alpha: 0.25),
+                  inactiveThumbColor: const Color(0xFF444466),
+                  inactiveTrackColor: const Color(0xFF1E1E35),
+                ),
+              ],
+            ),
+          ),
+          if (_stepEnabled) ...[
+            _divider(),
+            // Goal row
+            ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+              leading: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3498DB).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.flag_rounded,
+                    color: Color(0xFF3498DB), size: 18),
+              ),
+              title: const Text('Daily goal',
+                  style: TextStyle(color: Colors.white, fontSize: 15)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_fmtSteps(_stepGoal),
+                      style: const TextStyle(
+                          color: Color(0xFF888899), fontSize: 13)),
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: _editStepGoal,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFD700).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: const Color(0xFFFFD700).withValues(alpha: 0.3)),
+                      ),
+                      child: const Text('Edit',
+                          style: TextStyle(
+                              color: Color(0xFFFFD700),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _divider(),
+            // Notify toggle
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF2ECC71).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.notifications_rounded,
+                        color: Color(0xFF2ECC71), size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('Notify at goal',
+                        style: TextStyle(color: Colors.white, fontSize: 15)),
+                  ),
+                  Switch(
+                    value: _stepNotify,
+                    onChanged: (v) async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('step_notify_goal', v);
+                      if (mounted) setState(() => _stepNotify = v);
+                    },
+                    activeThumbColor: const Color(0xFFFFD700),
+                    activeTrackColor:
+                        const Color(0xFFFFD700).withValues(alpha: 0.25),
+                    inactiveThumbColor: const Color(0xFF444466),
+                    inactiveTrackColor: const Color(0xFF1E1E35),
+                  ),
+                ],
+              ),
+            ),
+            _divider(),
+            // Show on home toggle
+            Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF9B59B6).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.home_rounded,
+                        color: Color(0xFF9B59B6), size: 18),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text('Show on home screen',
+                        style: TextStyle(color: Colors.white, fontSize: 15)),
+                  ),
+                  Switch(
+                    value: _stepShowHome,
+                    onChanged: (v) async {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('step_show_home', v);
+                      if (mounted) setState(() => _stepShowHome = v);
+                    },
+                    activeThumbColor: const Color(0xFFFFD700),
+                    activeTrackColor:
+                        const Color(0xFFFFD700).withValues(alpha: 0.25),
+                    inactiveThumbColor: const Color(0xFF444466),
+                    inactiveTrackColor: const Color(0xFF1E1E35),
+                  ),
+                ],
+              ),
+            ),
+            // Platform-specific rows
+            if (Platform.isAndroid) ...[
+              _divider(),
+              // Samsung Health / Health Connect sync row
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1DB954).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: _hcSyncing
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Color(0xFF1DB954)),
+                            )
+                          : const Icon(Icons.watch_rounded,
+                              color: Color(0xFF1DB954), size: 18),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Sync Samsung Watch steps',
+                              style:
+                                  TextStyle(color: Colors.white, fontSize: 15)),
+                          if (_hcSyncResult != null)
+                            Text(_hcSyncResult!,
+                                style: const TextStyle(
+                                    color: Color(0xFF888899), fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _hcSyncing ? null : _syncHealthConnect,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1DB954).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color:
+                                  const Color(0xFF1DB954).withValues(alpha: 0.3)),
+                        ),
+                        child: Text(
+                          _hcSyncing ? 'Syncing…' : 'Sync now',
+                          style: TextStyle(
+                              color: _hcSyncing
+                                  ? const Color(0xFF555577)
+                                  : const Color(0xFF1DB954),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _divider(),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline_rounded,
+                        color: Color(0xFF555577), size: 16),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        'For accurate tracking, exclude Aawara from battery optimization.',
+                        style: TextStyle(
+                            color: Color(0xFF555577), fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _openBatterySettings,
+                      child: const Text('Open Settings',
+                          style: TextStyle(
+                              color: Color(0xFFFFD700), fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (Platform.isIOS) ...[
+              _divider(),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded,
+                        color: Color(0xFF2ECC71), size: 16),
+                    SizedBox(width: 8),
+                    Text('Reading steps from Apple Health',
+                        style: TextStyle(
+                            color: Color(0xFF555577), fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleStepTracking(bool value) async {
+    if (value) {
+      // Navigate to goal setup first, then enable via StepGoalScreen
+      final result = await Navigator.push<int>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => const StepGoalScreen(isFirstSetup: true)),
+      );
+      if (result != null) {
+        if (mounted) {
+          setState(() {
+            _stepEnabled = true;
+            _stepGoal = result;
+          });
+        }
+        // Show battery tip on Android (once)
+        if (Platform.isAndroid && !_batteryTipShown && mounted) {
+          _showBatteryTipDialog();
+        }
+      }
+    } else {
+      await StepTrackingService.disable();
+      if (mounted) setState(() => _stepEnabled = false);
+    }
+  }
+
+  Future<void> _editStepGoal() async {
+    final result = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => const StepGoalScreen(isFirstSetup: false)),
+    );
+    if (result != null && mounted) {
+      setState(() => _stepGoal = result);
+    }
+  }
+
+  Future<void> _openBatterySettings() async {
+    await openAppSettings();
+  }
+
+  Future<void> _syncHealthConnect() async {
+    setState(() {
+      _hcSyncing = true;
+      _hcSyncResult = null;
+    });
+    final result = await StepTrackingService.syncHealthConnectHistory(days: 30);
+    if (!mounted) return;
+    if (result.updated == 0 && result.skipped == 0) {
+      setState(() {
+        _hcSyncing = false;
+        _hcSyncResult =
+            'Could not connect — open Samsung Health → Health Connect and enable step sync';
+      });
+    } else {
+      setState(() {
+        _hcSyncing = false;
+        _hcSyncResult = result.updated > 0
+            ? '${result.updated} day${result.updated == 1 ? '' : 's'} updated from Samsung Health'
+            : 'Already up to date';
+      });
+    }
+    // Refresh today's live count
+    await StepTrackingService.refreshStream();
+  }
+
+  void _showBatteryTipDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title: const Text('One more step',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        content: const Text(
+          'To count steps even when Aawara isn\'t open, please disable battery optimization for Aawara. This keeps the step counter running all day.',
+          style: TextStyle(color: Color(0xFF888899), height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Maybe Later',
+                style: TextStyle(color: Color(0xFF555577))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _openBatterySettings();
+            },
+            child: const Text('Open Settings',
+                style: TextStyle(color: Color(0xFFFFD700))),
+          ),
+        ],
+      ),
+    );
+    // Mark as shown
+    SharedPreferences.getInstance()
+        .then((p) => p.setBool('battery_tip_shown', true));
+    setState(() => _batteryTipShown = true);
+  }
+
+  String _fmtSteps(int n) {
+    final s = n.toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
   }
 
   Widget _buildProfileCard() {
