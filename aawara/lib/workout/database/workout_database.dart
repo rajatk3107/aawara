@@ -27,7 +27,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 14,
+      version: 15,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -47,6 +47,11 @@ class WorkoutDatabase {
     if (oldVersion < 12) await _migrateV12(db);
     if (oldVersion < 13) await _migrateV13(db);
     if (oldVersion < 14) await _migrateV14(db);
+    if (oldVersion < 15) await _migrateV15(db);
+  }
+
+  Future<void> _migrateV15(Database db) async {
+    await db.execute('ALTER TABLE exercise_logs ADD COLUMN notes TEXT');
   }
 
   Future<void> _migrateV14(Database db) async {
@@ -337,7 +342,8 @@ class WorkoutDatabase {
         id TEXT PRIMARY KEY,
         workout_log_id TEXT NOT NULL,
         exercise_id TEXT NOT NULL,
-        order_index INTEGER NOT NULL
+        order_index INTEGER NOT NULL,
+        notes TEXT
       )
     ''');
 
@@ -1274,6 +1280,16 @@ class WorkoutDatabase {
     await db.delete('exercise_logs', where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<void> updateExerciseLogNote(String id, String? note) async {
+    final db = await database;
+    await db.update(
+      'exercise_logs',
+      {'notes': note},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
   Future<SetLog> createSetLog(SetLog setLog) async {
     final db = await database;
     await db.insert('set_logs', setLog.toMap());
@@ -2178,6 +2194,7 @@ class WorkoutDatabase {
           'workout_log_id': logId,
           'exercise_id': exId,
           'order_index': i,
+          'notes': e['note'] as String?,
         });
 
         final sets =
@@ -2356,6 +2373,10 @@ class WorkoutDatabase {
                 final done = (s['is_completed'] as int? ?? 0) == 1 ? ' ✓' : '';
                 sb.writeln('  - Set ${s['set_number']}: $w × $r$done');
               }
+            }
+            final exNote = exRow['notes'] as String?;
+            if (exNote != null && exNote.isNotEmpty) {
+              sb.writeln('  - _Note: $exNote_');
             }
           }
           sb.writeln();
@@ -2601,6 +2622,7 @@ class WorkoutDatabase {
           'muscle_group': ex?.muscleGroup ?? '',
           'equipment': ex?.equipment ?? '',
           'exercise_type': ex?.exerciseType ?? 'strength',
+          if (exLog.notes != null && exLog.notes!.isNotEmpty) 'note': exLog.notes,
           'sets': exLog.sets.map((s) => {
             'set_number': s.setNumber,
             'is_completed': s.isCompleted,
@@ -2832,6 +2854,7 @@ class WorkoutDatabase {
           'workout_log_id': logId,
           'exercise_id': exId,
           'order_index': i,
+          'notes': e['note'] as String?,
         });
         final sets = (e['sets'] as List? ?? []).cast<Map<String, dynamic>>();
         for (final s in sets) {

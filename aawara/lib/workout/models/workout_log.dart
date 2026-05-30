@@ -95,6 +95,7 @@ class ExerciseLog {
   final String workoutLogId;
   final String exerciseId;
   final int orderIndex;
+  final String? notes;
   final List<SetLog> sets;
 
   ExerciseLog({
@@ -102,6 +103,7 @@ class ExerciseLog {
     required this.workoutLogId,
     required this.exerciseId,
     required this.orderIndex,
+    this.notes,
     List<SetLog>? sets,
   }) : sets = sets ?? [];
 
@@ -110,6 +112,7 @@ class ExerciseLog {
         'workout_log_id': workoutLogId,
         'exercise_id': exerciseId,
         'order_index': orderIndex,
+        'notes': notes,
       };
 
   factory ExerciseLog.fromMap(Map<String, dynamic> map) => ExerciseLog(
@@ -117,6 +120,16 @@ class ExerciseLog {
         workoutLogId: map['workout_log_id'] as String,
         exerciseId: map['exercise_id'] as String,
         orderIndex: map['order_index'] as int,
+        notes: map['notes'] as String?,
+      );
+
+  ExerciseLog copyWith({String? notes}) => ExerciseLog(
+        id: id,
+        workoutLogId: workoutLogId,
+        exerciseId: exerciseId,
+        orderIndex: orderIndex,
+        notes: notes ?? this.notes,
+        sets: sets,
       );
 
   double get totalVolume =>

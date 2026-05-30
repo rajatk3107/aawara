@@ -1284,6 +1284,62 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
 
   // ─── Wellness Check-in Card ──────────────────────────────────────────────────
 
+  Future<void> _editSleepHours() async {
+    final ctrl = TextEditingController(
+      text: _wellnessSleep == _wellnessSleep.truncateToDouble()
+          ? _wellnessSleep.toInt().toString()
+          : _wellnessSleep.toStringAsFixed(1),
+    );
+    final result = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Sleep Hours',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+          textAlign: TextAlign.center,
+          decoration: const InputDecoration(
+            hintText: '0',
+            hintStyle: TextStyle(color: Colors.white24),
+            suffixText: 'hrs',
+            suffixStyle: TextStyle(color: Colors.white38, fontSize: 14),
+            enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFF333355))),
+            focusedBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: Color(0xFFFFD700))),
+          ),
+          onSubmitted: (_) {
+            final v = double.tryParse(ctrl.text.trim());
+            Navigator.pop(ctx, v);
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = double.tryParse(ctrl.text.trim());
+              Navigator.pop(ctx, v);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFFFD700)),
+            child: const Text('Set', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result != null && result >= 0 && mounted) {
+      setState(() => _wellnessSleep = result);
+    }
+  }
+
   Future<void> _logWellness() async {
     setState(() => _loggingWellness = true);
     final today = _fmt(DateTime.now());
@@ -1319,23 +1375,29 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           _WellnessLabel('😴'),
           const SizedBox(width: 3),
           GestureDetector(
-            onTap: () => setState(() {
-              if (_wellnessSleep > 5.0) _wellnessSleep -= 0.5;
-            }),
+            onTap: () => setState(() => _wellnessSleep = (_wellnessSleep - 0.5).clamp(0.0, 99.0)),
             child: const Icon(Icons.remove_rounded,
                 color: Color(0xFF555577), size: 16),
           ),
           const SizedBox(width: 4),
-          Text(
-            _wellnessSleep.toStringAsFixed(1),
-            style: const TextStyle(
-                color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+          GestureDetector(
+            onTap: _editSleepHours,
+            child: Text(
+              _wellnessSleep == _wellnessSleep.truncateToDouble()
+                  ? _wellnessSleep.toInt().toString()
+                  : _wellnessSleep.toStringAsFixed(1),
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  decoration: TextDecoration.underline,
+                  decorationColor: Color(0xFF555577),
+                  decorationStyle: TextDecorationStyle.dotted),
+            ),
           ),
           const SizedBox(width: 4),
           GestureDetector(
-            onTap: () => setState(() {
-              if (_wellnessSleep < 10.0) _wellnessSleep += 0.5;
-            }),
+            onTap: () => setState(() => _wellnessSleep = (_wellnessSleep + 0.5).clamp(0.0, 99.0)),
             child: const Icon(Icons.add_rounded,
                 color: Color(0xFF555577), size: 16),
           ),

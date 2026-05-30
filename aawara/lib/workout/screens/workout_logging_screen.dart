@@ -44,6 +44,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // Plateau alerts — exerciseId set for O(1) lookup
   final Set<String> _plateauedIds = {};
 
+  // Per-exercise note controllers (keyed by exerciseLog.id)
+  final Map<String, TextEditingController> _noteControllers = {};
+
   // Exercises that have already shown the overload nudge this session
   final Set<String> _nudgedExercises = {};
 
@@ -140,6 +143,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     _durationTimer?.cancel();
     _restTimer?.cancel();
     _saveTimerState();
+    for (final c in _noteControllers.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
@@ -171,6 +177,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     for (final exLog in _log.exercises) {
       final ex = await _db.getExerciseById(exLog.exerciseId);
       if (ex != null) _exercises[exLog.id] = ex;
+
+      _noteControllers.putIfAbsent(
+        exLog.id,
+        () => TextEditingController(text: exLog.notes ?? ''),
+      );
 
       // Build hint from last session
       final prev = await _db.getLastSetsForExercise(exLog.exerciseId);
@@ -648,6 +659,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     );
     if (confirmed == true) {
       await _db.deleteExerciseLog(exLog.id);
+      _noteControllers.remove(exLog.id)?.dispose();
       setState(() {
         _log.exercises.removeWhere((e) => e.id == exLog.id);
         if (_expandedId == exLog.id) {
@@ -672,6 +684,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     );
     await _db.createExerciseLog(exLog);
     _exercises[exLog.id] = picked;
+    _noteControllers[exLog.id] = TextEditingController();
     final prev = await _db.getLastSetsForExercise(picked.id);
     if (prev.isNotEmpty && !picked.isCardio) {
       final s = prev.first;
@@ -1195,6 +1208,27 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                               ],
                             ),
                           ),
+                        if (!isExpanded && (exLog.notes?.isNotEmpty ?? false))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.notes_rounded,
+                                    color: Color(0xFF5577AA), size: 9),
+                                const SizedBox(width: 3),
+                                Flexible(
+                                  child: Text(
+                                    exLog.notes!,
+                                    style: const TextStyle(
+                                        color: Color(0xFF5577AA),
+                                        fontSize: 10),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -1280,11 +1314,93 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
             if (!_log.completed)
               _buildAddSetBtn(exLog),
 
+            // Exercise note
+            _buildExerciseNote(exLog),
+
             const SizedBox(height: 4),
           ],
         ],
       ),
     );
+  }
+
+  Widget _buildExerciseNote(ExerciseLog exLog) {
+    final ctrl = _noteControllers[exLog.id];
+    if (ctrl == null) return const SizedBox.shrink();
+    final isReadOnly = _log.completed;
+
+    if (isReadOnly) {
+      if (exLog.notes == null || exLog.notes!.isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 14, 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.notes_rounded, color: Color(0xFF5577AA), size: 13),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                exLog.notes!,
+                style: const TextStyle(color: Color(0xFF8899BB), fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
+      child: TextField(
+        controller: ctrl,
+        style: const TextStyle(color: Colors.white70, fontSize: 12),
+        maxLines: null,
+        keyboardType: TextInputType.multiline,
+        textCapitalization: TextCapitalization.sentences,
+        onChanged: (_) => setState(() {}),
+        onEditingComplete: () => _saveNote(exLog, ctrl.text),
+        onTapOutside: (_) {
+          FocusScope.of(context).unfocus();
+          _saveNote(exLog, ctrl.text);
+        },
+        decoration: InputDecoration(
+          hintText: 'Add a note for this exercise…',
+          hintStyle: const TextStyle(color: Color(0xFF333355), fontSize: 12),
+          prefixIcon: const Padding(
+            padding: EdgeInsets.only(left: 10, right: 6),
+            child: Icon(Icons.notes_rounded, color: Color(0xFF444466), size: 14),
+          ),
+          prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
+          filled: true,
+          fillColor: const Color(0xFF0D0D1A),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(
+                color: Color(0xFF5577AA), width: 1),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveNote(ExerciseLog exLog, String text) async {
+    final note = text.trim().isEmpty ? null : text.trim();
+    if (note == exLog.notes) return;
+    await _db.updateExerciseLogNote(exLog.id, note);
+    final idx = _log.exercises.indexWhere((e) => e.id == exLog.id);
+    if (idx != -1 && mounted) {
+      setState(() {
+        _log = _log.copyWith(
+          exercises: List.from(_log.exercises)
+            ..[idx] = exLog.copyWith(notes: note),
+        );
+      });
+    }
   }
 
   // ─── Strength set row ─────────────────────────────────────────────────────────

@@ -620,6 +620,7 @@ class _ExportScreenState extends State<ExportScreen> {
               'muscle_group': ex?.muscleGroup ?? '',
               'equipment': ex?.equipment ?? '',
               'exercise_type': ex?.exerciseType ?? 'strength',
+              if (exLog.notes != null && exLog.notes!.isNotEmpty) 'note': exLog.notes,
               'sets': exLog.sets.map((s) => {
                 'set_number': s.setNumber,
                 'is_completed': s.isCompleted,
