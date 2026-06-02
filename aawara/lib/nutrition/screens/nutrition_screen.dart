@@ -5,6 +5,7 @@ import '../../workout/widgets/step_counter_card.dart';
 import '../../utils/safe_navigation.dart';
 import '../widgets/add_food_sheet.dart';
 import '../widgets/edit_food_entry_sheet.dart';
+import '../widgets/meal_picker_sheet.dart';
 import '../widgets/water_tracker_card.dart';
 import 'meal_presets_screen.dart';
 import 'nutrition_goals_screen.dart';
@@ -24,9 +25,8 @@ class _NutritionScreenState extends State<NutritionScreen> {
   NutritionTotals _totals = NutritionTotals.empty;
   NutritionGoals _goals = NutritionGoals.defaults;
   Map<String, String> _mealNames = {};
+  List<String> _activeMealKeys = [];
   bool _loading = true;
-
-  static const _mealKeys = ['meal_1', 'meal_2', 'meal_3', 'meal_4', 'meal_5'];
 
   static const _defaultMealNames = {
     'meal_1': 'Meal 1',
@@ -46,6 +46,8 @@ class _NutritionScreenState extends State<NutritionScreen> {
     'meal_4': '🍎',
     'meal_5': '🌃',
   };
+
+  String _iconForKey(String key) => _mealIcons[key] ?? '🍽️';
 
   String get _dateStr {
     final d = _selectedDate;
@@ -70,17 +72,26 @@ class _NutritionScreenState extends State<NutritionScreen> {
       _db.getFoodsForDate(_dateStr),
       _db.getNutritionGoals(),
       _db.getMealTemplates(),
+      _db.getMealSlotKeys(),
     ]);
     if (!mounted) return;
     final templates = results[2] as Map<String, String>;
+    final slotKeys = results[3] as List<String>;
     setState(() {
       _totals = results[0] as NutritionTotals;
       _goals = (results[1] as NutritionGoals?) ?? NutritionGoals.defaults;
+      _activeMealKeys = slotKeys;
       _mealNames = {
-        for (final key in _mealKeys) key: templates[key] ?? _defaultMealNames[key]!
+        for (final key in slotKeys)
+          key: templates[key] ?? _defaultMealNames[key] ?? _labelFromKey(key)
       };
       _loading = false;
     });
+  }
+
+  String _labelFromKey(String key) {
+    final num = key.replaceAll('meal_', '');
+    return 'Meal $num';
   }
 
   void _prevDay() {
@@ -96,7 +107,15 @@ class _NutritionScreenState extends State<NutritionScreen> {
 
   Future<void> _deleteMeal(String mealKey, String displayName) async {
     final entries = _totals.entries.where((e) => e.mealType == mealKey).toList();
-    if (entries.isEmpty) return;
+    if (entries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('$displayName is already empty'),
+        backgroundColor: const Color(0xFF1A1A2E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      return;
+    }
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -161,7 +180,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
       entry: e,
       mealNames: _mealNames,
       defaultMealNames: _defaultMealNames,
-      mealKeys: _mealKeys,
+      mealKeys: _activeMealKeys,
     );
     if (changed == true) _load();
   }
@@ -176,7 +195,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
         title: const Text('Move to meal', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          children: _mealKeys.map((key) {
+          children: _activeMealKeys.map((key) {
             final isSelected = key == current;
             return ListTile(
               contentPadding: EdgeInsets.zero,
@@ -201,7 +220,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
     }
   }
 
-  Future<void> _showAddFood({String mealKey = 'meal_4'}) async {
+  Future<void> _showAddFood({required String mealKey}) async {
     final added = await showAddFoodSheet(
       context,
       date: _dateStr,
@@ -209,6 +228,64 @@ class _NutritionScreenState extends State<NutritionScreen> {
       mealDisplayName: _displayName(mealKey),
     );
     if (added) _load();
+  }
+
+  Future<void> _pickMealThenAddFood() async {
+    final picked = await showMealPickerSheet(
+      context,
+      mealNames: _mealNames,
+      defaultMealNames: _defaultMealNames,
+      mealKeys: _activeMealKeys,
+      mealIcons: {for (final k in _activeMealKeys) k: _iconForKey(k)},
+    );
+    if (picked == null || !mounted) return;
+    // Reload if a new meal was created (new key not previously in list)
+    if (!_activeMealKeys.contains(picked)) await _load();
+    if (!mounted) return;
+    await _showAddFood(mealKey: picked);
+  }
+
+  Future<void> _deleteMealSlot(String mealKey, String displayName) async {
+    if (_activeMealKeys.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('At least one meal must remain'),
+        backgroundColor: const Color(0xFF1A1A2E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      return;
+    }
+    final entryCount = _totals.entries.where((e) => e.mealType == mealKey).length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Text('Delete $displayName?',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          entryCount > 0
+              ? 'This will permanently remove $displayName and all $entryCount food log entries across all dates.'
+              : 'This will permanently remove $displayName.',
+          style: const TextStyle(color: Color(0xFF888899), height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF888899))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete meal',
+                style: TextStyle(color: Color(0xFFE74C3C), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _db.deleteMealSlot(mealKey);
+      _load();
+    }
   }
 
   Future<void> _renameMeal(String mealKey) async {
@@ -318,13 +395,13 @@ class _NutritionScreenState extends State<NutritionScreen> {
                     const SizedBox(height: 12),
                     const StepCounterCard(),
                     const SizedBox(height: 12),
-                    ..._mealKeys.map(_buildMealSection),
+                    ..._activeMealKeys.map(_buildMealSection),
                   ],
                 ),
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showAddFood(),
+        onPressed: _pickMealThenAddFood,
         backgroundColor: const Color(0xFFFFD700),
         foregroundColor: Colors.black,
         icon: const Icon(Icons.add_rounded),
@@ -494,7 +571,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
               child: Row(
                 children: [
-                  Text(_mealIcons[mealKey]!, style: const TextStyle(fontSize: 18)),
+                  Text(_iconForKey(mealKey), style: const TextStyle(fontSize: 18)),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(name,
@@ -518,18 +595,24 @@ class _NutritionScreenState extends State<NutritionScreen> {
                           _saveAsPreset(mealKey);
                         case _MealAction.deleteAll:
                           _deleteMeal(mealKey, name);
+                        case _MealAction.deleteMeal:
+                          _deleteMealSlot(mealKey, name);
                       }
                     },
                     itemBuilder: (_) => [
                       _mealMenuItem(_MealAction.rename,
                           Icons.edit_rounded, 'Rename meal'),
-                      if (entries.isNotEmpty) ...[
+                      if (entries.isNotEmpty)
                         _mealMenuItem(_MealAction.savePreset,
                             Icons.bookmark_add_outlined, 'Save as preset'),
-                        _mealMenuItem(_MealAction.deleteAll,
-                            Icons.delete_sweep_rounded, 'Delete all items',
-                            color: const Color(0xFFE74C3C)),
-                      ],
+                      _mealMenuItem(_MealAction.deleteAll,
+                          Icons.delete_sweep_rounded, 'Delete all items',
+                          color: entries.isNotEmpty
+                              ? const Color(0xFFE74C3C)
+                              : const Color(0xFF444466)),
+                      _mealMenuItem(_MealAction.deleteMeal,
+                          Icons.delete_forever_rounded, 'Delete meal',
+                          color: const Color(0xFFE74C3C)),
                     ],
                   ),
                   const SizedBox(width: 2),
@@ -744,4 +827,4 @@ class _NutritionScreenState extends State<NutritionScreen> {
 
 enum _EntryAction { edit, move, delete }
 
-enum _MealAction { rename, savePreset, deleteAll }
+enum _MealAction { rename, savePreset, deleteAll, deleteMeal }

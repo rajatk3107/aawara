@@ -27,7 +27,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 18,
+      version: 19,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -51,6 +51,24 @@ class WorkoutDatabase {
     if (oldVersion < 16) await _migrateV16(db);
     if (oldVersion < 17) await _migrateV17(db);
     if (oldVersion < 18) await _migrateV18(db);
+    if (oldVersion < 19) await _migrateV19(db);
+  }
+
+  Future<void> _migrateV19(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_slots (
+        meal_key TEXT PRIMARY KEY,
+        display_order INTEGER NOT NULL
+      )
+    ''');
+    // Seed the 5 default slots for existing users
+    for (int i = 1; i <= 5; i++) {
+      await db.insert(
+        'meal_slots',
+        {'meal_key': 'meal_$i', 'display_order': i},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
   }
 
   Future<void> _migrateV18(Database db) async {
@@ -443,6 +461,12 @@ class WorkoutDatabase {
       CREATE TABLE IF NOT EXISTS meal_templates (
         meal_key TEXT PRIMARY KEY,
         name TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_slots (
+        meal_key TEXT PRIMARY KEY,
+        display_order INTEGER NOT NULL
       )
     ''');
     await db.execute('''
@@ -3889,6 +3913,39 @@ class WorkoutDatabase {
       {'meal_key': mealKey, 'name': name},
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<List<String>> getMealSlotKeys() async {
+    final db = await database;
+    try {
+      final rows = await db.query('meal_slots', orderBy: 'display_order ASC');
+      if (rows.isEmpty) return ['meal_1', 'meal_2', 'meal_3', 'meal_4', 'meal_5'];
+      return rows.map((r) => r['meal_key'] as String).toList();
+    } catch (_) {
+      return ['meal_1', 'meal_2', 'meal_3', 'meal_4', 'meal_5'];
+    }
+  }
+
+  // Creates a new meal slot with an auto-generated key and saves its name.
+  // Returns the new meal key.
+  Future<String> createMealSlot(String name) async {
+    final db = await database;
+    final maxRow = await db.rawQuery('SELECT MAX(display_order) as m FROM meal_slots');
+    final maxOrder = (maxRow.first['m'] as int?) ?? 5;
+    final newOrder = maxOrder + 1;
+    final mealKey = 'meal_$newOrder';
+    await db.insert('meal_slots', {'meal_key': mealKey, 'display_order': newOrder},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    await saveMealTemplate(mealKey, name);
+    return mealKey;
+  }
+
+  // Deletes a meal slot and all its food log entries across all dates.
+  Future<void> deleteMealSlot(String mealKey) async {
+    final db = await database;
+    await db.rawDelete('DELETE FROM nutrition_entries WHERE meal_type = ?', [mealKey]);
+    await db.delete('meal_templates', where: 'meal_key = ?', whereArgs: [mealKey]);
+    await db.delete('meal_slots', where: 'meal_key = ?', whereArgs: [mealKey]);
   }
 
   Future<NutritionTotals> getTodayTotals(String date) => getFoodsForDate(date);
