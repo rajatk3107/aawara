@@ -94,6 +94,38 @@ class _NutritionScreenState extends State<NutritionScreen> {
     _load();
   }
 
+  Future<void> _deleteMeal(String mealKey, String displayName) async {
+    final entries = _totals.entries.where((e) => e.mealType == mealKey).toList();
+    if (entries.isEmpty) return;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: Text('Delete $displayName?',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Remove all ${entries.length} item${entries.length == 1 ? '' : 's'} from $displayName?',
+          style: const TextStyle(color: Color(0xFF888899)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF888899))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete all', style: TextStyle(color: Color(0xFFE74C3C), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _db.deleteMealEntries(_dateStr, mealKey);
+      _load();
+    }
+  }
+
   Future<void> _deleteEntry(NutritionEntry e) async {
     final confirm = await showDialog<bool>(
       context: context,
@@ -459,7 +491,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
             onTap: () => _showAddFood(mealKey: mealKey),
             onLongPress: () => _renameMeal(mealKey),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
               child: Row(
                 children: [
                   Text(_mealIcons[mealKey]!, style: const TextStyle(fontSize: 18)),
@@ -469,26 +501,41 @@ class _NutritionScreenState extends State<NutritionScreen> {
                         style: const TextStyle(
                             color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
                   ),
-                  if (mealCal > 0) ...[
+                  if (mealCal > 0)
                     Text('${mealCal.round()} kcal',
                         style: const TextStyle(color: Color(0xFF888899), fontSize: 13)),
-                    const SizedBox(width: 6),
-                    GestureDetector(
-                      onTap: () => _saveAsPreset(mealKey),
-                      child: const Icon(Icons.bookmark_add_outlined,
-                          color: Color(0xFF555577), size: 18),
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                  // Rename hint icon
-                  GestureDetector(
-                    onTap: () => _renameMeal(mealKey),
-                    child: const Icon(Icons.edit_outlined,
-                        color: Color(0xFF444466), size: 15),
+                  // ⋮ options menu (rename / save preset / delete meal)
+                  PopupMenuButton<_MealAction>(
+                    icon: const Icon(Icons.more_vert_rounded,
+                        color: Color(0xFF555577), size: 18),
+                    color: const Color(0xFF1E1E35),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    onSelected: (action) {
+                      switch (action) {
+                        case _MealAction.rename:
+                          _renameMeal(mealKey);
+                        case _MealAction.savePreset:
+                          _saveAsPreset(mealKey);
+                        case _MealAction.deleteAll:
+                          _deleteMeal(mealKey, name);
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      _mealMenuItem(_MealAction.rename,
+                          Icons.edit_rounded, 'Rename meal'),
+                      if (entries.isNotEmpty) ...[
+                        _mealMenuItem(_MealAction.savePreset,
+                            Icons.bookmark_add_outlined, 'Save as preset'),
+                        _mealMenuItem(_MealAction.deleteAll,
+                            Icons.delete_sweep_rounded, 'Delete all items',
+                            color: const Color(0xFFE74C3C)),
+                      ],
+                    ],
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 2),
                   const Icon(Icons.add_circle_outline_rounded,
                       color: Color(0xFFFFD700), size: 20),
+                  const SizedBox(width: 8),
                 ],
               ),
             ),
@@ -502,10 +549,20 @@ class _NutritionScreenState extends State<NutritionScreen> {
 
   Widget _buildEntryRow(NutritionEntry e) {
     final totalGrams = e.quantity * e.food.servingSize;
-    final gramsStr = totalGrams % 1 == 0
-        ? totalGrams.toInt().toString()
-        : totalGrams.toStringAsFixed(1);
-    final servingLabel = '$gramsStr${e.food.servingUnit}';
+    final String servingLabel;
+    final unit = e.food.servingUnit;
+    if (unit == 'g' || unit == 'ml') {
+      final gramsStr = totalGrams % 1 == 0
+          ? totalGrams.toInt().toString()
+          : totalGrams.toStringAsFixed(1);
+      servingLabel = '$gramsStr$unit';
+    } else {
+      // Supplement/custom units like "scoop (33g)", "tablet (1.82g)", etc.
+      final qtyStr = e.quantity == e.quantity.truncateToDouble()
+          ? e.quantity.toInt().toString()
+          : e.quantity.toStringAsFixed(2);
+      servingLabel = '$qtyStr × $unit';
+    }
 
     return Column(
       children: [
@@ -570,6 +627,20 @@ class _NutritionScreenState extends State<NutritionScreen> {
   }
 
   PopupMenuItem<_EntryAction> _menuItem(_EntryAction action, IconData icon, String label,
+      {Color color = const Color(0xFFCCCCDD)}) {
+    return PopupMenuItem(
+      value: action,
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 12),
+          Text(label, style: TextStyle(color: color, fontSize: 14)),
+        ],
+      ),
+    );
+  }
+
+  PopupMenuItem<_MealAction> _mealMenuItem(_MealAction action, IconData icon, String label,
       {Color color = const Color(0xFFCCCCDD)}) {
     return PopupMenuItem(
       value: action,
@@ -672,3 +743,5 @@ class _NutritionScreenState extends State<NutritionScreen> {
 }
 
 enum _EntryAction { edit, move, delete }
+
+enum _MealAction { rename, savePreset, deleteAll }

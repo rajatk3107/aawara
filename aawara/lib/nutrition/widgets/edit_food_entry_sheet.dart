@@ -142,10 +142,11 @@ class _EditFoodEntrySheetState extends State<EditFoodEntrySheet> {
   Widget build(BuildContext context) {
     final kb = MediaQuery.of(context).viewInsets.bottom;
     final screenH = MediaQuery.of(context).size.height;
-    final cal = (_food.calories * _quantity).round();
-    final prot = _food.proteinG * _quantity;
-    final carbs = _food.carbsG * _quantity;
-    final fat = _food.fatG * _quantity;
+    final scale = _quantity * _food.servingSize / 100.0;
+    final cal = (_food.calories * scale).round();
+    final prot = _food.proteinG * scale;
+    final carbs = _food.carbsG * scale;
+    final fat = _food.fatG * scale;
     final totalGrams = _quantity * _food.servingSize;
     final unit = _naturalUnit();
     final unitLabel = _quantity == 1.0 ? unit : '${unit}s';

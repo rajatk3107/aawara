@@ -538,10 +538,11 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
 
   Widget _buildQuantityPicker() {
     final f = _selected!;
-    final cal = (f.calories * _quantity).round();
-    final prot = f.proteinG * _quantity;
-    final carbs = f.carbsG * _quantity;
-    final fat = f.fatG * _quantity;
+    final scale = _quantity * f.servingSize / 100.0;
+    final cal = (f.calories * scale).round();
+    final prot = f.proteinG * scale;
+    final carbs = f.carbsG * scale;
+    final fat = f.fatG * scale;
     final totalGrams = _quantity * f.servingSize;
     final unit = _naturalUnit(f);
     final unitLabel = _quantity == 1.0 ? unit : _pluralUnit(f);
@@ -708,9 +709,12 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                 style: const TextStyle(
                     color: Color(0xFF555577), fontSize: 13)),
             const SizedBox(height: 4),
-            Text('= $gramsStr${f.servingUnit}',
-                style: const TextStyle(
-                    color: Color(0xFF444466), fontSize: 11)),
+            Text(
+              (f.servingUnit == 'g' || f.servingUnit == 'ml')
+                  ? '= $gramsStr${f.servingUnit}'
+                  : '= ${f.servingUnit}',
+              style: const TextStyle(color: Color(0xFF444466), fontSize: 11),
+            ),
           ],
         ),
         const SizedBox(width: 24),

@@ -27,7 +27,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 17,
+      version: 18,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -50,6 +50,86 @@ class WorkoutDatabase {
     if (oldVersion < 15) await _migrateV15(db);
     if (oldVersion < 16) await _migrateV16(db);
     if (oldVersion < 17) await _migrateV17(db);
+    if (oldVersion < 18) await _migrateV18(db);
+  }
+
+  Future<void> _migrateV18(Database db) async {
+    // Correct nuts/seeds from IFCT → USDA values (per 100g)
+    // All values verified against USDA FoodData Central
+    final corrections = <String, Map<String, double>>{
+      'Almonds': {
+        'calories': 577, 'protein_g': 20.0, 'carbs_g': 20.0,
+        'fat_g': 50.0, 'fiber_g': 11.7, 'sugar_g': 4.0,
+        'saturated_fat_g': 3.7,
+      },
+      'Cashews': {
+        'calories': 553, 'protein_g': 18.2, 'carbs_g': 30.2,
+        'fat_g': 43.9, 'fiber_g': 3.3, 'sugar_g': 5.9,
+        'saturated_fat_g': 7.8,
+      },
+      'Walnuts': {
+        'calories': 654, 'protein_g': 15.2, 'carbs_g': 13.7,
+        'fat_g': 65.2, 'fiber_g': 6.7, 'sugar_g': 2.6,
+        'saturated_fat_g': 6.1,
+      },
+      'Pistachios': {
+        'calories': 560, 'protein_g': 20.2, 'carbs_g': 27.2,
+        'fat_g': 45.3, 'fiber_g': 10.6, 'sugar_g': 7.7,
+        'saturated_fat_g': 5.9,
+      },
+    };
+    for (final entry in corrections.entries) {
+      await db.update(
+        'foods',
+        entry.value,
+        where: 'name = ? AND is_custom = 0',
+        whereArgs: [entry.key],
+      );
+    }
+
+    // Add new milk variants
+    const uuid = Uuid();
+    final newFoods = [
+      {
+        'id': uuid.v4(),
+        'name': 'Indian Cow milk without malai',
+        'calories': 34.6,
+        'protein_g': 3.46,
+        'carbs_g': 5.0,
+        'fat_g': 0.08,
+        'fiber_g': 0.0,
+        'sugar_g': 5.0,
+        'sodium_mg': 43.0,
+        'saturated_fat_g': 0.04,
+        'trans_fat_g': 0.0,
+        'cholesterol_mg': 2.0,
+        'serving_size': 240.0,
+        'serving_unit': 'ml',
+        'is_custom': 0,
+        'source': 'seeded',
+      },
+      {
+        'id': uuid.v4(),
+        'name': 'Indian Buffalo milk without malai',
+        'calories': 39.6,
+        'protein_g': 3.96,
+        'carbs_g': 5.42,
+        'fat_g': 0.21,
+        'fiber_g': 0.0,
+        'sugar_g': 5.42,
+        'sodium_mg': 52.0,
+        'saturated_fat_g': 0.08,
+        'trans_fat_g': 0.0,
+        'cholesterol_mg': 3.0,
+        'serving_size': 240.0,
+        'serving_unit': 'ml',
+        'is_custom': 0,
+        'source': 'seeded',
+      },
+    ];
+    for (final food in newFoods) {
+      await db.insert('foods', food, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
   }
 
   Future<void> _migrateV17(Database db) async {
@@ -918,6 +998,8 @@ class WorkoutDatabase {
     ('Pear',                       57,    0.4,   15.5,  0.1,   3.1,   150, 'g',   9.8,   1.0,   0.0,   0.0,   0.0),
     ('Strawberry',                 33,    0.7,   7.7,   0.3,   2.0,   100, 'g',   4.9,   1.0,   0.0,   0.0,   0.0),
     // ── Dairy ──────────────────────────────────────────────────────────────────
+    ('Indian Cow milk without malai',     34.6,  3.46,  5.0,   0.08,  0.0,   240, 'ml',  5.0,   43.0,  0.04,  0.0,   2.0),
+    ('Indian Buffalo milk without malai', 39.6,  3.96,  5.42,  0.21,  0.0,   240, 'ml',  5.42,  52.0,  0.08,  0.0,   3.0),
     ('Milk (full fat)',            67,    3.2,   4.4,   4.1,   0.0,   250, 'ml',  4.7,   43.0,  2.4,   0.1,   14.0),
     ('Milk (toned)',               58,    3.5,   4.8,   3.0,   0.0,   250, 'ml',  4.8,   44.0,  1.8,   0.1,   10.0),
     ('Milk (skimmed)',             35,    3.6,   5.0,   0.1,   0.0,   250, 'ml',  5.0,   45.0,  0.1,   0.0,   2.0),
@@ -954,12 +1036,12 @@ class WorkoutDatabase {
     ('Tuna (canned in water)',     116,   25.5,  0.0,   0.8,   0.0,   100, 'g',   0.0,   350.0, 0.2,   0.0,   47.0),
     ('Fish Curry',                 130,   17.0,  2.5,   6.0,   0.2,   100, 'g',   1.5,   280.0, 1.5,   0.0,   45.0),
     // ── Nuts & Seeds ───────────────────────────────────────────────────────────
-    ('Almonds',                    655,   24.3,  21.7,  57.7,  12.5,  30,  'g',   4.4,   1.0,   4.4,   0.0,   0.0),
-    ('Cashews',                    596,   18.5,  32.7,  46.9,  3.3,   30,  'g',   5.9,   12.0,  9.2,   0.0,   0.0),
-    ('Walnuts',                    696,   15.2,  13.7,  65.2,  6.7,   30,  'g',   2.6,   2.0,   6.1,   0.0,   0.0),
+    ('Almonds',                    577,   20.0,  20.0,  50.0,  11.7,  30,  'g',   4.0,   1.0,   3.7,   0.0,   0.0),
+    ('Cashews',                    553,   18.2,  30.2,  43.9,  3.3,   30,  'g',   5.9,   12.0,  7.8,   0.0,   0.0),
+    ('Walnuts',                    654,   15.2,  13.7,  65.2,  6.7,   30,  'g',   2.6,   2.0,   6.1,   0.0,   0.0),
     ('Peanuts (raw)',              567,   25.8,  16.1,  49.2,  8.5,   30,  'g',   4.7,   18.0,  6.9,   0.0,   0.0),
     ('Peanuts (roasted)',          585,   26.0,  19.0,  49.5,  8.0,   30,  'g',   4.0,   11.0,  7.0,   0.0,   0.0),
-    ('Pistachios',                 557,   20.6,  27.5,  45.4,  10.3,  30,  'g',   7.7,   1.0,   5.9,   0.0,   0.0),
+    ('Pistachios',                 560,   20.2,  27.2,  45.3,  10.6,  30,  'g',   7.7,   1.0,   5.9,   0.0,   0.0),
     ('Sesame Seeds',               573,   17.7,  23.5,  49.7,  11.8,  15,  'g',   0.3,   11.0,  7.0,   0.0,   0.0),
     ('Flaxseed',                   534,   18.3,  28.9,  42.2,  27.3,  15,  'g',   1.6,   30.0,  3.7,   0.0,   0.0),
     ('Sunflower Seeds',            584,   20.8,  20.0,  51.5,  8.6,   20,  'g',   2.6,   9.0,   4.5,   0.0,   0.0),
@@ -3764,6 +3846,16 @@ class WorkoutDatabase {
   Future<void> deleteNutritionEntry(String entryId) async {
     final db = await database;
     await db.delete('nutrition_entries', where: 'id = ?', whereArgs: [entryId]);
+  }
+
+  Future<void> deleteMealEntries(String date, String mealType) async {
+    final db = await database;
+    final logId = await _getOrCreateNutritionLog(date);
+    await db.delete(
+      'nutrition_entries',
+      where: 'log_id = ? AND meal_type = ?',
+      whereArgs: [logId, mealType],
+    );
   }
 
   Future<void> updateNutritionEntry(

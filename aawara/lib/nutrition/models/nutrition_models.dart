@@ -241,11 +241,14 @@ class NutritionEntry {
     required this.createdAt,
   });
 
-  double get calories => food.calories * quantity;
-  double get proteinG => food.proteinG * quantity;
-  double get carbsG => food.carbsG * quantity;
-  double get fatG => food.fatG * quantity;
-  double get fiberG => (food.fiberG ?? 0) * quantity;
+  // Nutritional values scale by (quantity × servingSize / 100) because
+  // all per-100g values need to be multiplied by the actual grams consumed.
+  double get _scale => quantity * food.servingSize / 100.0;
+  double get calories => food.calories * _scale;
+  double get proteinG => food.proteinG * _scale;
+  double get carbsG => food.carbsG * _scale;
+  double get fatG => food.fatG * _scale;
+  double get fiberG => (food.fiberG ?? 0) * _scale;
 }
 
 class NutritionTotals {
