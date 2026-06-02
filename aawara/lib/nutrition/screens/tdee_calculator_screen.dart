@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/nutrition_models.dart';
 import '../../workout/database/workout_database.dart';
+import '../../utils/safe_navigation.dart';
 
 class TdeeCalculatorScreen extends StatefulWidget {
   const TdeeCalculatorScreen({super.key});
@@ -19,6 +21,12 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
   double _weight = 70;
   int _activityLevel = 2; // 0–4
   int _goal = 1;           // 0=lose, 1=maintain, 2=gain
+
+  // Custom overrides — null means use the calculated value
+  double? _customCal;
+  double? _customProtein;
+  double? _customCarbs;
+  double? _customFat;
 
   bool _loading = true;
   bool _saving = false;
@@ -58,6 +66,10 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
         _weight = weight ?? prefs.getDouble('tdee_weight') ?? 70;
         _activityLevel = prefs.getInt('tdee_activity') ?? 2;
         _goal = prefs.getInt('tdee_goal') ?? 1;
+        _customCal = prefs.getDouble('tdee_custom_cal');
+        _customProtein = prefs.getDouble('tdee_custom_protein');
+        _customCarbs = prefs.getDouble('tdee_custom_carbs');
+        _customFat = prefs.getDouble('tdee_custom_fat');
         _loading = false;
       });
     }
@@ -71,6 +83,15 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
     await prefs.setDouble('tdee_weight', _weight);
     await prefs.setInt('tdee_activity', _activityLevel);
     await prefs.setInt('tdee_goal', _goal);
+    // Save or clear custom overrides
+    if (_customCal != null) await prefs.setDouble('tdee_custom_cal', _customCal!);
+    else await prefs.remove('tdee_custom_cal');
+    if (_customProtein != null) await prefs.setDouble('tdee_custom_protein', _customProtein!);
+    else await prefs.remove('tdee_custom_protein');
+    if (_customCarbs != null) await prefs.setDouble('tdee_custom_carbs', _customCarbs!);
+    else await prefs.remove('tdee_custom_carbs');
+    if (_customFat != null) await prefs.setDouble('tdee_custom_fat', _customFat!);
+    else await prefs.remove('tdee_custom_fat');
   }
 
   // Mifflin-St Jeor
@@ -89,18 +110,101 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
     [0.30, 0.45, 0.25], // gain
   ];
 
-  double get _proteinG => (_targetCal * _splits[_goal][0]) / 4;
-  double get _carbsG => (_targetCal * _splits[_goal][1]) / 4;
-  double get _fatG => (_targetCal * _splits[_goal][2]) / 9;
+  double get _calcProteinG => (_targetCal * _splits[_goal][0]) / 4;
+  double get _calcCarbsG => (_targetCal * _splits[_goal][1]) / 4;
+  double get _calcFatG => (_targetCal * _splits[_goal][2]) / 9;
+
+  // Final values — custom override wins if set
+  double get _finalCal => _customCal ?? _targetCal;
+  double get _finalProtein => _customProtein ?? _calcProteinG;
+  double get _finalCarbs => _customCarbs ?? _calcCarbsG;
+  double get _finalFat => _customFat ?? _calcFatG;
+
+  bool get _hasAnyCustom =>
+      _customCal != null || _customProtein != null ||
+      _customCarbs != null || _customFat != null;
+
+  Future<void> _editValue({
+    required String label,
+    required String unit,
+    required double current,
+    required double? customValue,
+    required void Function(double?) onChanged,
+  }) async {
+    final ctrl = TextEditingController(
+        text: current.round().toString());
+    final result = await showDialog<double?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Set $label',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Color(0xFFFFD700), fontSize: 36, fontWeight: FontWeight.bold),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                suffixText: unit,
+                suffixStyle: const TextStyle(color: Color(0xFF888899), fontSize: 16),
+              ),
+            ),
+            if (customValue != null)
+              TextButton.icon(
+                onPressed: () => Navigator.pop(ctx, -1.0), // sentinel = reset
+                icon: const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF555577)),
+                label: const Text('Reset to calculated',
+                    style: TextStyle(color: Color(0xFF555577), fontSize: 12)),
+                style: TextButton.styleFrom(padding: EdgeInsets.zero),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => popAfterFocusSettles(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF888899))),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = double.tryParse(ctrl.text);
+              popAfterFocusSettles(ctx, v);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFD700),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Set', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return; // cancelled
+    setState(() {
+      onChanged(result < 0 ? null : result); // -1 sentinel resets to null
+    });
+    _savePrefs();
+  }
 
   Future<void> _applyGoals() async {
     setState(() => _saving = true);
     await _savePrefs();
     await _db.saveNutritionGoals(NutritionGoals(
-      calories: _targetCal,
-      proteinG: _proteinG,
-      carbsG: _carbsG,
-      fatG: _fatG,
+      calories: _finalCal,
+      proteinG: _finalProtein,
+      carbsG: _finalCarbs,
+      fatG: _finalFat,
     ));
     if (mounted) {
       setState(() => _saving = false);
@@ -245,43 +349,130 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
       ),
       child: Column(
         children: [
-          Text(
-            '${_targetCal.round()}',
-            style: const TextStyle(
-                color: Color(0xFFFFD700),
-                fontSize: 48,
-                fontWeight: FontWeight.bold,
-                height: 1),
+          // Tappable calorie target
+          GestureDetector(
+            onTap: () => _editValue(
+              label: 'Calories',
+              unit: 'kcal',
+              current: _finalCal,
+              customValue: _customCal,
+              onChanged: (v) => _customCal = v,
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      '${_finalCal.round()}',
+                      style: const TextStyle(
+                          color: Color(0xFFFFD700),
+                          fontSize: 48,
+                          fontWeight: FontWeight.bold,
+                          height: 1),
+                    ),
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.edit_rounded,
+                      color: _customCal != null
+                          ? const Color(0xFFFFD700)
+                          : const Color(0xFF444466),
+                      size: 16,
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text('kcal / day',
+                        style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
+                    if (_customCal != null) ...[
+                      const SizedBox(width: 6),
+                      const Text('· custom',
+                          style: TextStyle(color: Color(0xFFFFD700), fontSize: 11)),
+                    ],
+                  ],
+                ),
+              ],
+            ),
           ),
-          const Text('kcal / day',
-              style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
           const SizedBox(height: 16),
+          // Tappable macro cards
           Row(
             children: [
-              _MacroCard(
+              _EditableMacroCard(
                 label: 'Protein',
-                grams: _proteinG,
+                grams: _finalProtein,
+                isCustom: _customProtein != null,
                 color: const Color(0xFF5DCAA5),
+                onTap: () => _editValue(
+                  label: 'Protein',
+                  unit: 'g',
+                  current: _finalProtein,
+                  customValue: _customProtein,
+                  onChanged: (v) => _customProtein = v,
+                ),
               ),
               const SizedBox(width: 8),
-              _MacroCard(
+              _EditableMacroCard(
                 label: 'Carbs',
-                grams: _carbsG,
+                grams: _finalCarbs,
+                isCustom: _customCarbs != null,
                 color: const Color(0xFFEF9F27),
+                onTap: () => _editValue(
+                  label: 'Carbs',
+                  unit: 'g',
+                  current: _finalCarbs,
+                  customValue: _customCarbs,
+                  onChanged: (v) => _customCarbs = v,
+                ),
               ),
               const SizedBox(width: 8),
-              _MacroCard(
+              _EditableMacroCard(
                 label: 'Fat',
-                grams: _fatG,
+                grams: _finalFat,
+                isCustom: _customFat != null,
                 color: const Color(0xFFF0997B),
+                onTap: () => _editValue(
+                  label: 'Fat',
+                  unit: 'g',
+                  current: _finalFat,
+                  customValue: _customFat,
+                  onChanged: (v) => _customFat = v,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 14),
-          Text(
-            'BMR: ${_bmr.round()} kcal  ·  TDEE: ${_tdee.round()} kcal',
-            style: const TextStyle(
-                color: Color(0xFF444466), fontSize: 11),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'BMR: ${_bmr.round()} kcal  ·  TDEE: ${_tdee.round()} kcal',
+                style: const TextStyle(color: Color(0xFF444466), fontSize: 11),
+              ),
+              if (_hasAnyCustom) ...[
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _customCal = null;
+                      _customProtein = null;
+                      _customCarbs = null;
+                      _customFat = null;
+                    });
+                    _savePrefs();
+                  },
+                  child: const Text('Reset all',
+                      style: TextStyle(
+                          color: Color(0xFF555577),
+                          fontSize: 11,
+                          decoration: TextDecoration.underline,
+                          decorationColor: Color(0xFF555577))),
+                ),
+              ],
+            ],
           ),
         ],
       ),
@@ -490,36 +681,60 @@ class _TdeeCalculatorScreenState extends State<TdeeCalculatorScreen> {
 
 // ─── Sub-widgets ──────────────────────────────────────────────────────────────
 
-class _MacroCard extends StatelessWidget {
+class _EditableMacroCard extends StatelessWidget {
   final String label;
   final double grams;
+  final bool isCustom;
   final Color color;
+  final VoidCallback onTap;
 
-  const _MacroCard(
-      {required this.label, required this.grams, required this.color});
+  const _EditableMacroCard({
+    required this.label,
+    required this.grams,
+    required this.isCustom,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-        ),
-        child: Column(
-          children: [
-            Text(
-              '${grams.round()}g',
-              style: TextStyle(
-                  color: color, fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 2),
-            Text(label,
-                style: const TextStyle(
-                    color: Color(0xFF888899), fontSize: 11)),
-          ],
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: isCustom ? 0.15 : 0.1),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: color.withValues(alpha: isCustom ? 0.6 : 0.3),
+                width: isCustom ? 1.5 : 1),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    '${grams.round()}g',
+                    style: TextStyle(
+                        color: color, fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(Icons.edit_rounded,
+                      color: color.withValues(alpha: isCustom ? 1.0 : 0.4),
+                      size: 11),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                isCustom ? '$label ✓' : label,
+                style: TextStyle(
+                    color: isCustom ? color.withValues(alpha: 0.8) : const Color(0xFF888899),
+                    fontSize: 11),
+              ),
+            ],
+          ),
         ),
       ),
     );

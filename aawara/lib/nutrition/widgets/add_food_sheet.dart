@@ -10,12 +10,13 @@ Future<bool> showAddFoodSheet(
   BuildContext context, {
   required String date,
   required String meal,
+  String? mealDisplayName,
 }) async {
   final result = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => AddFoodSheet(date: date, meal: meal),
+    builder: (_) => AddFoodSheet(date: date, meal: meal, mealDisplayName: mealDisplayName),
   );
   return result == true;
 }
@@ -23,8 +24,9 @@ Future<bool> showAddFoodSheet(
 class AddFoodSheet extends StatefulWidget {
   final String date;
   final String meal;
+  final String? mealDisplayName;
 
-  const AddFoodSheet({super.key, required this.date, required this.meal});
+  const AddFoodSheet({super.key, required this.date, required this.meal, this.mealDisplayName});
 
   @override
   State<AddFoodSheet> createState() => _AddFoodSheetState();
@@ -169,7 +171,9 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     final next = (cur + delta).clamp(1.0, 9999.0);
     final rounded = next.roundToDouble();
     setState(() {
-      _gramsCtrl.text = rounded.toInt().toString();
+      _gramsCtrl.text = rounded == rounded.truncateToDouble()
+          ? rounded.toInt().toString()
+          : rounded.toStringAsFixed(1);
       _quantity = rounded / _selected!.servingSize;
     });
   }
@@ -223,7 +227,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                   child: Text(
                     _selected != null
                         ? _selected!.name
-                        : 'Add to ${widget.meal}',
+                        : 'Add to ${widget.mealDisplayName ?? widget.meal}',
                     style: const TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -626,7 +630,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                       height: 20,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.black))
-                  : Text('Add to ${widget.meal}',
+                  : Text('Add to ${widget.mealDisplayName ?? widget.meal}',
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 16)),
             ),
@@ -736,9 +740,9 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                         color: Colors.white,
                         fontSize: 32,
                         fontWeight: FontWeight.bold),
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly
+                      FilteringTextInputFormatter.allow(RegExp(r'^\d+\.?\d{0,1}'))
                     ],
                     decoration: const InputDecoration(
                         border: InputBorder.none,

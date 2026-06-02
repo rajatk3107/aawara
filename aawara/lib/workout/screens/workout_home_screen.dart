@@ -17,6 +17,8 @@ import '../../nutrition/models/nutrition_models.dart';
 import '../../nutrition/screens/nutrition_screen.dart';
 import '../../utils/safe_navigation.dart';
 import '../widgets/workout_heatmap.dart';
+import '../widgets/step_counter_card.dart';
+import 'body_measurements_screen.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -509,6 +511,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                             child: _buildNutritionPill())),
+                    SliverToBoxAdapter(
+                        child: Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: const StepCounterCard())),
                     if (_showWellnessCard)
                       SliverToBoxAdapter(
                           child: Padding(
@@ -1206,7 +1212,12 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
             ? (_todayCalories / _calorieGoalKcal).clamp(0.0, 1.0)
             : 0.0);
     final protOver = _todayProteinG >= _proteinGoalG;
-    return Container(
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const NutritionScreen()),
+      ),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
@@ -1277,9 +1288,12 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
               ],
             ),
           ),
+          const Icon(Icons.chevron_right_rounded,
+              color: Color(0xFF333355), size: 16),
         ],
       ),
-    );
+    ),  // end Container
+    );  // end GestureDetector
   }
 
   // ─── Wellness Check-in Card ──────────────────────────────────────────────────
@@ -1497,6 +1511,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           const Color(0xFFE67E22), () {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const WorkoutHistoryScreen()));
+      }),
+      _NavItem(Icons.straighten_rounded, 'Measurements', 'Body dimensions',
+          const Color(0xFF1ABC9C), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const BodyMeasurementsScreen()));
       }),
     ];
 

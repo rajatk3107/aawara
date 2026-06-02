@@ -27,7 +27,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 16,
+      version: 17,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -49,6 +49,29 @@ class WorkoutDatabase {
     if (oldVersion < 14) await _migrateV14(db);
     if (oldVersion < 15) await _migrateV15(db);
     if (oldVersion < 16) await _migrateV16(db);
+    if (oldVersion < 17) await _migrateV17(db);
+  }
+
+  Future<void> _migrateV17(Database db) async {
+    // Create configurable meal names table
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_templates (
+        meal_key TEXT PRIMARY KEY,
+        name TEXT NOT NULL
+      )
+    ''');
+    // Migrate fixed meal names → numbered keys
+    await db.rawUpdate("UPDATE nutrition_entries SET meal_type = 'meal_1' WHERE meal_type = 'Breakfast'");
+    await db.rawUpdate("UPDATE nutrition_entries SET meal_type = 'meal_2' WHERE meal_type = 'Lunch'");
+    await db.rawUpdate("UPDATE nutrition_entries SET meal_type = 'meal_3' WHERE meal_type = 'Dinner'");
+    await db.rawUpdate("UPDATE nutrition_entries SET meal_type = 'meal_4' WHERE meal_type = 'Snack'");
+    // Also fix any meal_presets_items that stored meal_type (for logMealPreset)
+    try {
+      await db.rawUpdate("UPDATE meal_preset_items SET meal_type = 'meal_1' WHERE meal_type = 'Breakfast'");
+      await db.rawUpdate("UPDATE meal_preset_items SET meal_type = 'meal_2' WHERE meal_type = 'Lunch'");
+      await db.rawUpdate("UPDATE meal_preset_items SET meal_type = 'meal_3' WHERE meal_type = 'Dinner'");
+      await db.rawUpdate("UPDATE meal_preset_items SET meal_type = 'meal_4' WHERE meal_type = 'Snack'");
+    } catch (_) {}
   }
 
   Future<void> _migrateV16(Database db) async {
@@ -334,6 +357,12 @@ class WorkoutDatabase {
         preset_id TEXT NOT NULL,
         food_id TEXT NOT NULL,
         quantity REAL NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS meal_templates (
+        meal_key TEXT PRIMARY KEY,
+        name TEXT NOT NULL
       )
     ''');
     await db.execute('''
@@ -3735,6 +3764,39 @@ class WorkoutDatabase {
   Future<void> deleteNutritionEntry(String entryId) async {
     final db = await database;
     await db.delete('nutrition_entries', where: 'id = ?', whereArgs: [entryId]);
+  }
+
+  Future<void> updateNutritionEntry(
+    String entryId, {
+    double? quantity,
+    String? mealType,
+  }) async {
+    final db = await database;
+    final updates = <String, dynamic>{};
+    if (quantity != null) updates['quantity'] = quantity;
+    if (mealType != null) updates['meal_type'] = mealType;
+    if (updates.isEmpty) return;
+    await db.update('nutrition_entries', updates,
+        where: 'id = ?', whereArgs: [entryId]);
+  }
+
+  Future<Map<String, String>> getMealTemplates() async {
+    final db = await database;
+    try {
+      final rows = await db.query('meal_templates');
+      return {for (final r in rows) r['meal_key'] as String: r['name'] as String};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> saveMealTemplate(String mealKey, String name) async {
+    final db = await database;
+    await db.insert(
+      'meal_templates',
+      {'meal_key': mealKey, 'name': name},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<NutritionTotals> getTodayTotals(String date) => getFoodsForDate(date);
