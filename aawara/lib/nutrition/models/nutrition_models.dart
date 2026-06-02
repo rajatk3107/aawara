@@ -13,6 +13,9 @@ class Food {
   final String? brand;
   final double? sugarG;
   final double? sodiumMg;
+  final double? saturatedFatG;
+  final double? transFatG;
+  final double? cholesterolMg;
   final String? source;
   final String? lastUpdated;
 
@@ -31,6 +34,9 @@ class Food {
     this.brand,
     this.sugarG,
     this.sodiumMg,
+    this.saturatedFatG,
+    this.transFatG,
+    this.cholesterolMg,
     this.source,
     this.lastUpdated,
   });
@@ -50,6 +56,9 @@ class Food {
         brand: m['brand'] as String?,
         sugarG: (m['sugar_g'] as num?)?.toDouble(),
         sodiumMg: (m['sodium_mg'] as num?)?.toDouble(),
+        saturatedFatG: (m['saturated_fat_g'] as num?)?.toDouble(),
+        transFatG: (m['trans_fat_g'] as num?)?.toDouble(),
+        cholesterolMg: (m['cholesterol_mg'] as num?)?.toDouble(),
         source: m['source'] as String?,
         lastUpdated: m['last_updated'] as String?,
       );
@@ -69,6 +78,9 @@ class Food {
         'brand': brand,
         'sugar_g': sugarG,
         'sodium_mg': sodiumMg,
+        'saturated_fat_g': saturatedFatG,
+        'trans_fat_g': transFatG,
+        'cholesterol_mg': cholesterolMg,
         'source': source,
         'last_updated': lastUpdated,
       };
@@ -88,6 +100,9 @@ class Food {
     String? brand,
     double? sugarG,
     double? sodiumMg,
+    double? saturatedFatG,
+    double? transFatG,
+    double? cholesterolMg,
     String? source,
     String? lastUpdated,
   }) =>
@@ -106,6 +121,9 @@ class Food {
         brand: brand ?? this.brand,
         sugarG: sugarG ?? this.sugarG,
         sodiumMg: sodiumMg ?? this.sodiumMg,
+        saturatedFatG: saturatedFatG ?? this.saturatedFatG,
+        transFatG: transFatG ?? this.transFatG,
+        cholesterolMg: cholesterolMg ?? this.cholesterolMg,
         source: source ?? this.source,
         lastUpdated: lastUpdated ?? this.lastUpdated,
       );
