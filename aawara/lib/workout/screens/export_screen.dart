@@ -284,12 +284,13 @@ class _ExportScreenState extends State<ExportScreen> {
 
     setState(() => _exportingAI = true);
     try {
+      final (from, to) = _fromTo;
       final catNames = selected
           .where((c) => c != _DataCategory.notes)
           .map((c) => c.name)
           .toSet();
 
-      var content = await _db.exportForAI(categories: catNames);
+      var content = await _db.exportForAI(categories: catNames, fromDate: from, toDate: to);
 
       if (selected.contains(_DataCategory.notes)) {
         final notes = await NotesDatabase.instance.getNotes();
@@ -544,8 +545,9 @@ class _ExportScreenState extends State<ExportScreen> {
       prs = await db.rawQuery('''
         SELECT ep.best_1rm, ep.date, e.name
         FROM exercise_prs ep JOIN exercises e ON e.id = ep.exercise_id
+        WHERE ep.date >= ? AND ep.date <= ?
         ORDER BY ep.best_1rm DESC
-      ''');
+      ''', [from, to]);
     }
 
     List<DailyNutritionSummary> nutritionData = [];

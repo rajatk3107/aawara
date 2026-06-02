@@ -2226,16 +2226,24 @@ class WorkoutDatabase {
 
   /// Generates a human-readable Markdown document containing all user data,
   /// formatted for pasting into any AI chatbot for personalised analysis.
-  Future<String> exportForAI({Set<String>? categories}) async {
+  Future<String> exportForAI({
+    Set<String>? categories,
+    String? fromDate,
+    String? toDate,
+  }) async {
     // null categories = include everything
     bool hasCat(String key) => categories == null || categories.contains(key);
     final db = await database;
     final today = _fmt(DateTime.now());
+    final from = fromDate ?? '2000-01-01';
+    final to = toDate ?? today;
+    final isFiltered = from != '2000-01-01' || to != today;
     final sb = StringBuffer();
 
     // ── Header ────────────────────────────────────────────────────────────────
     sb.writeln('# Aawara Fitness & Nutrition Data');
     sb.writeln('> Generated: $today');
+    if (isFiltered) sb.writeln('> Date range: $from → $to');
     sb.writeln('> Paste this into any AI assistant to get personalised analysis of your fitness, nutrition, and wellness trends.');
     sb.writeln();
 
@@ -2245,12 +2253,23 @@ class WorkoutDatabase {
     sb.writeln('|--------|-------|');
     if (hasCat('workouts')) {
       final totalWorkouts = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM workout_logs WHERE completed = 1')) ?? 0;
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM workout_logs WHERE completed = 1 AND date >= ? AND date <= ?',
+            [from, to],
+          )) ?? 0;
       final totalWorkoutMins = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT SUM(duration_seconds) FROM workout_logs WHERE completed = 1')) ?? 0;
-      final totalVolume = (await db.rawQuery(
-          'SELECT SUM(weight * reps) as v FROM set_logs WHERE weight IS NOT NULL AND reps IS NOT NULL'
-      )).first['v'];
+          await db.rawQuery(
+            'SELECT SUM(duration_seconds) FROM workout_logs WHERE completed = 1 AND date >= ? AND date <= ?',
+            [from, to],
+          )) ?? 0;
+      final totalVolume = (await db.rawQuery('''
+        SELECT SUM(sl.weight * sl.reps) as v
+        FROM set_logs sl
+        JOIN exercise_logs el ON el.id = sl.exercise_log_id
+        JOIN workout_logs wl ON wl.id = el.workout_log_id
+        WHERE sl.weight IS NOT NULL AND sl.reps IS NOT NULL
+          AND wl.date >= ? AND wl.date <= ?
+      ''', [from, to])).first['v'];
       sb.writeln('| Completed workouts | $totalWorkouts |');
       sb.writeln('| Total training time | ${(totalWorkoutMins / 60).toStringAsFixed(0)} hours |');
       if (totalVolume != null) {
@@ -2259,17 +2278,26 @@ class WorkoutDatabase {
     }
     if (hasCat('bodyWeight')) {
       final bwCount = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM body_weight_logs')) ?? 0;
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM body_weight_logs WHERE date >= ? AND date <= ?',
+            [from, to],
+          )) ?? 0;
       sb.writeln('| Body weight entries | $bwCount |');
     }
     if (hasCat('nutrition')) {
       final nutritionDays = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM nutrition_logs')) ?? 0;
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM nutrition_logs WHERE date >= ? AND date <= ?',
+            [from, to],
+          )) ?? 0;
       sb.writeln('| Nutrition days logged | $nutritionDays |');
     }
     if (hasCat('stepLogs')) {
       final stepDays = Sqflite.firstIntValue(
-          await db.rawQuery('SELECT COUNT(*) FROM step_logs')) ?? 0;
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM step_logs WHERE date >= ? AND date <= ?',
+            [from, to],
+          )) ?? 0;
       sb.writeln('| Step days logged | $stepDays |');
     }
     sb.writeln();
@@ -2289,7 +2317,10 @@ class WorkoutDatabase {
 
     // ── Body Weight ───────────────────────────────────────────────────────────
     if (hasCat('bodyWeight')) {
-      final bwLogs = await db.query('body_weight_logs', orderBy: 'date ASC');
+      final bwLogs = await db.query('body_weight_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
       if (bwLogs.isNotEmpty) {
         sb.writeln('## Body Weight Log');
         final first = bwLogs.first;
@@ -2316,8 +2347,9 @@ class WorkoutDatabase {
         SELECT ep.best_1rm, ep.date, e.name
         FROM exercise_prs ep
         JOIN exercises e ON e.id = ep.exercise_id
+        WHERE ep.date >= ? AND ep.date <= ?
         ORDER BY ep.best_1rm DESC
-      ''');
+      ''', [from, to]);
       if (prs.isNotEmpty) {
         sb.writeln('## Personal Records (Best Estimated 1RM)');
         sb.writeln('| Exercise | Best 1RM (kg) | Date |');
@@ -2331,7 +2363,10 @@ class WorkoutDatabase {
 
     // ── Workout History ───────────────────────────────────────────────────────
     if (hasCat('workouts')) {
-      final wLogs = await db.query('workout_logs', orderBy: 'date DESC');
+      final wLogs = await db.query('workout_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date DESC');
       if (wLogs.isNotEmpty) {
         sb.writeln('## Workout History');
         for (final wRow in wLogs) {
@@ -2386,7 +2421,10 @@ class WorkoutDatabase {
 
     // ── Nutrition ─────────────────────────────────────────────────────────────
     if (hasCat('nutrition')) {
-      final nutLogs = await db.query('nutrition_logs', orderBy: 'date DESC');
+      final nutLogs = await db.query('nutrition_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date DESC');
       if (nutLogs.isNotEmpty) {
         sb.writeln('## Nutrition — Daily Summaries');
         double sumCal = 0, sumPro = 0, sumCarb = 0, sumFat = 0;
@@ -2462,7 +2500,10 @@ class WorkoutDatabase {
 
     // ── Water Intake ──────────────────────────────────────────────────────────
     if (hasCat('water')) {
-      final water = await db.query('water_logs', orderBy: 'date ASC');
+      final water = await db.query('water_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
       if (water.isNotEmpty) {
         sb.writeln('## Water Intake');
         final avgGlasses = water.fold(0, (s, r) => s + (r['glasses_drunk'] as int)) / water.length;
@@ -2482,7 +2523,10 @@ class WorkoutDatabase {
 
     // ── Wellness Log ──────────────────────────────────────────────────────────
     if (hasCat('wellness')) {
-      final wellness = await db.query('wellness_logs', orderBy: 'date DESC');
+      final wellness = await db.query('wellness_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date DESC');
       if (wellness.isNotEmpty) {
         sb.writeln('## Wellness Log');
         final avgSleep = wellness.fold(0.0, (s, r) => s + (r['sleep_hours'] as num).toDouble()) / wellness.length;
@@ -2504,7 +2548,10 @@ class WorkoutDatabase {
 
     // ── Step Logs ─────────────────────────────────────────────────────────────
     if (hasCat('stepLogs')) {
-      final steps = await db.query('step_logs', orderBy: 'date DESC');
+      final steps = await db.query('step_logs',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date DESC');
       if (steps.isNotEmpty) {
         sb.writeln('## Step Logs');
         final avgSteps = steps.fold(0, (s, r) => s + (r['steps'] as int)) / steps.length;
@@ -2524,10 +2571,12 @@ class WorkoutDatabase {
 
     // ── Body Measurements ─────────────────────────────────────────────────────
     if (hasCat('bodyMeasurements')) {
-      final rows = await db.query('body_measurements', orderBy: 'date ASC, type ASC');
+      final rows = await db.query('body_measurements',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC, type ASC');
       if (rows.isNotEmpty) {
         sb.writeln('## Body Measurements (cm)');
-        // Group by type for trend summary
         final byType = <String, List<Map<String, dynamic>>>{};
         for (final r in rows) {
           final t = r['type'] as String;
