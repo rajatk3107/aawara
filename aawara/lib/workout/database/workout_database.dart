@@ -1996,6 +1996,22 @@ class WorkoutDatabase {
     return (rows.first['weight_kg'] as num).toDouble();
   }
 
+  // Returns the body weight as of [date]: the entry for that exact date if
+  // it exists, otherwise the most recent entry from any earlier date.
+  Future<double?> getBodyWeightAsOf(String date) async {
+    final db = await database;
+    final rows = await db.query(
+      'body_weight_logs',
+      where: 'date <= ?',
+      whereArgs: [date],
+      orderBy: 'date DESC',
+      limit: 1,
+      columns: ['weight_kg'],
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['weight_kg'] as num).toDouble();
+  }
+
   // ─── BODY MEASUREMENTS ──────────────────────────────────────────────────────
 
   Future<void> logMeasurement(String date, String type, double valueCm) async {
@@ -3970,6 +3986,33 @@ class WorkoutDatabase {
     final db = await database;
     await db.insert('foods', food.toMap());
     return food;
+  }
+
+  // Update a custom food. Only foods with is_custom = 1 can be updated.
+  Future<void> updateCustomFood(Food food) async {
+    final db = await database;
+    await db.update(
+      'foods',
+      food.toMap(),
+      where: 'id = ? AND is_custom = 1',
+      whereArgs: [food.id],
+    );
+  }
+
+  // Delete a custom food. Only foods with is_custom = 1 can be deleted.
+  // Also removes any logged nutrition entries that reference this food.
+  Future<void> deleteCustomFood(String foodId) async {
+    final db = await database;
+    await db.delete(
+      'nutrition_entries',
+      where: 'food_id = ?',
+      whereArgs: [foodId],
+    );
+    await db.delete(
+      'foods',
+      where: 'id = ? AND is_custom = 1',
+      whereArgs: [foodId],
+    );
   }
 
   Future<Food?> getFoodByExactName(String name) async {

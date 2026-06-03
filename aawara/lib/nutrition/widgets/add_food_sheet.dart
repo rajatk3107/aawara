@@ -500,40 +500,156 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
   }
 
   Widget _buildFoodTile(Food food) {
+    // Display per-serving values (food.calories is per 100g)
+    final scale = food.servingSize / 100.0;
+    final perServingCal = (food.calories * scale).round();
+    final perServingProt = food.proteinG * scale;
     return InkWell(
       onTap: () => _selectFood(food),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+        padding: const EdgeInsets.fromLTRB(20, 11, 8, 11),
         child: Row(
           children: [
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(food.name,
-                      style: const TextStyle(
-                          color: Color(0xFFCCCCDD),
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500)),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(food.name,
+                            style: const TextStyle(
+                                color: Color(0xFFCCCCDD),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                      if (food.isCustom) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFD700).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text('Custom',
+                              style: TextStyle(
+                                  color: Color(0xFFFFD700),
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700)),
+                        ),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 2),
                   Text(
                       '${food.servingSize.round()}${food.servingUnit} · '
-                      '${food.calories.round()} kcal',
+                      '$perServingCal kcal',
                       style: const TextStyle(
                           color: Color(0xFF555577), fontSize: 12)),
                 ],
               ),
             ),
-            Text('P ${food.proteinG.toStringAsFixed(1)}g',
-                style:
-                    const TextStyle(color: Color(0xFF3498DB), fontSize: 12)),
-            const SizedBox(width: 8),
-            const Icon(Icons.chevron_right_rounded,
-                color: Color(0xFF333355), size: 18),
+            Text('P ${perServingProt.toStringAsFixed(1)}g',
+                style: const TextStyle(color: Color(0xFF3498DB), fontSize: 12)),
+            if (food.isCustom)
+              PopupMenuButton<_CustomFoodAction>(
+                icon: const Icon(Icons.more_vert_rounded,
+                    color: Color(0xFF555577), size: 18),
+                color: const Color(0xFF1E1E35),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onSelected: (action) {
+                  switch (action) {
+                    case _CustomFoodAction.edit:
+                      _editCustomFood(food);
+                    case _CustomFoodAction.delete:
+                      _deleteCustomFood(food);
+                  }
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: _CustomFoodAction.edit,
+                    child: Row(
+                      children: const [
+                        Icon(Icons.edit_rounded, color: Color(0xFFCCCCDD), size: 18),
+                        SizedBox(width: 12),
+                        Text('Edit',
+                            style: TextStyle(color: Color(0xFFCCCCDD), fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _CustomFoodAction.delete,
+                    child: Row(
+                      children: const [
+                        Icon(Icons.delete_outline_rounded,
+                            color: Color(0xFFE74C3C), size: 18),
+                        SizedBox(width: 12),
+                        Text('Delete',
+                            style: TextStyle(color: Color(0xFFE74C3C), fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(Icons.chevron_right_rounded,
+                    color: Color(0xFF333355), size: 18),
+              ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _editCustomFood(Food food) async {
+    final updated = await Navigator.push<Food>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddCustomFoodScreen(
+          date: widget.date,
+          meal: widget.meal,
+          existingFood: food,
+        ),
+      ),
+    );
+    if (updated != null) {
+      // Re-run the search so the list reflects the updated values.
+      await _search(_searchCtrl.text);
+    }
+  }
+
+  Future<void> _deleteCustomFood(Food food) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text('Delete custom food?',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Delete "${food.name}"? Any log entries for this food will also be removed.',
+          style: const TextStyle(color: Color(0xFF888899), height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF888899))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete',
+                style: TextStyle(color: Color(0xFFE74C3C), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true) {
+      await _db.deleteCustomFood(food.id);
+      await _search(_searchCtrl.text);
+    }
   }
 
   Widget _buildQuantityPicker() {
@@ -846,3 +962,5 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     }
   }
 }
+
+enum _CustomFoodAction { edit, delete }

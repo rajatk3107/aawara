@@ -99,19 +99,18 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
       final weekSunday = weekMonday.add(const Duration(days: 6));
       final weekFrom = _fmt(weekMonday);
       final weekTo = _fmt(weekSunday);
-      final todayStr = _fmt(now);
 
       final results = await Future.wait([
         _db.getWorkoutLogsForDate(_dateStr),
         _db.getWorkoutStreak(),
         _db.getWeeklyWorkoutCount(),
         _db.getMonthlyWorkoutCount(),
-        _db.getLatestBodyWeight(),
+        _db.getBodyWeightAsOf(_dateStr),
         _db.getCompletedWorkoutDatesInRange(weekFrom, weekTo),
-        _db.getWellnessForDate(todayStr),
-        _db.getTodayTotals(todayStr),
+        _db.getWellnessForDate(_dateStr),
+        _db.getTodayTotals(_dateStr),
         _db.getNutritionGoals(),
-        _db.getWaterLog(todayStr),
+        _db.getWaterLog(_dateStr),
       ]);
 
       final logs = results[0] as List<WorkoutLog>;
@@ -180,12 +179,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     }
   }
 
-  Future<void> _loadForDate() async {
-    try {
-      final logs = await _db.getWorkoutLogsForDate(_dateStr);
-      if (mounted) setState(() => _dayLogs = logs);
-    } catch (_) {}
-  }
+  Future<void> _loadForDate() => _load();
 
   Future<void> _startWorkoutFlow() async {
     await showModalBottomSheet(
@@ -514,7 +508,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
                     SliverToBoxAdapter(
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                            child: const StepCounterCard())),
+                            child: StepCounterCard(date: _dateStr))),
                     if (_showWellnessCard)
                       SliverToBoxAdapter(
                           child: Padding(

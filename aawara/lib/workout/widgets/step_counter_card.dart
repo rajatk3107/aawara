@@ -4,10 +4,16 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/step_tracking_service.dart';
 import '../../utils/safe_navigation.dart';
+import '../database/workout_database.dart';
 import '../screens/step_goal_screen.dart';
 
 class StepCounterCard extends StatefulWidget {
-  const StepCounterCard({super.key});
+  // Optional date — when omitted or matches today, the card behaves as a live
+  // counter (stream subscription, manual edit, refresh). When set to a past
+  // date, it loads the stored step count for that date and hides edit/refresh.
+  final String? date;
+
+  const StepCounterCard({super.key, this.date});
 
   @override
   State<StepCounterCard> createState() => _StepCounterCardState();
@@ -23,10 +29,28 @@ class _StepCounterCardState extends State<StepCounterCard> {
   StreamSubscription<StepUpdate>? _sub;
   Timer? _goalBannerTimer;
 
+  String _todayDateStr() {
+    final n = DateTime.now();
+    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+  }
+
+  bool get _isHistorical =>
+      widget.date != null && widget.date != _todayDateStr();
+
   @override
   void initState() {
     super.initState();
     _init();
+  }
+
+  @override
+  void didUpdateWidget(StepCounterCard old) {
+    super.didUpdateWidget(old);
+    if (old.date != widget.date) {
+      _sub?.cancel();
+      _sub = null;
+      _init();
+    }
   }
 
   @override
@@ -44,6 +68,19 @@ class _StepCounterCardState extends State<StepCounterCard> {
 
     final prefs = await SharedPreferences.getInstance();
     final goal = prefs.getInt('step_goal') ?? 8000;
+
+    if (_isHistorical) {
+      // Read stored step log for the past date
+      final row = await WorkoutDatabase.instance.getStepLog(widget.date!);
+      if (!mounted) return;
+      setState(() {
+        _goal = row != null ? (row['goal'] as num).toInt() : goal;
+        _steps = row != null ? (row['steps'] as num).toInt() : 0;
+        _manualSteps = 0;
+      });
+      return;
+    }
+
     final steps = await StepTrackingService.getTodaySteps();
     final manualSteps = await StepTrackingService.getManualStepsAdded();
     if (!mounted) return;
@@ -109,6 +146,74 @@ class _StepCounterCardState extends State<StepCounterCard> {
         _manualSteps = manual;
         _refreshing = false;
       });
+    }
+  }
+
+  Future<void> _editHistoricalSteps() async {
+    final ctrl = TextEditingController(text: _steps > 0 ? '$_steps' : '');
+    final updated = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text(
+          'Edit Steps',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Set step count for ${widget.date}',
+              style: const TextStyle(color: Color(0xFF888899), fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: Color(0xFFFFD700),
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                hintText: '0',
+                hintStyle: TextStyle(color: Color(0xFF444466)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => popAfterFocusSettles(ctx),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final v = int.tryParse(ctrl.text.trim());
+              popAfterFocusSettles(ctx, v);
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFD700),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+              elevation: 0,
+            ),
+            child: const Text('Save',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (updated != null && updated >= 0 && widget.date != null) {
+      await WorkoutDatabase.instance.upsertStepLog(widget.date!, updated, _goal);
+      if (mounted) setState(() => _steps = updated);
     }
   }
 
@@ -268,22 +373,26 @@ class _StepCounterCardState extends State<StepCounterCard> {
             const Icon(Icons.directions_walk_rounded,
                 color: Color(0xFF888899), size: 18),
             const SizedBox(width: 6),
-            const Text('Steps',
-                style: TextStyle(color: Color(0xFF888899), fontSize: 13)),
+            Text(_isHistorical ? 'Steps · past day' : 'Steps',
+                style: const TextStyle(color: Color(0xFF888899), fontSize: 13)),
             const Spacer(),
+            // Edit button — always visible (live mode edits today, historical
+            // mode writes directly to that date's step_logs row).
             GestureDetector(
-              onTap: _addStepsManually,
+              onTap: _isHistorical
+                  ? _editHistoricalSteps
+                  : _addStepsManually,
               child: Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
-                  color: _manualSteps != 0
+                  color: (!_isHistorical && _manualSteps != 0)
                       ? const Color(0xFFFFD700).withValues(alpha: 0.10)
                       : const Color(0xFF2A2A45),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   Icons.edit_rounded,
-                  color: _manualSteps != 0
+                  color: (!_isHistorical && _manualSteps != 0)
                       ? const Color(0xFFFFD700)
                       : const Color(0xFFAAAAAA),
                   size: 15,
@@ -291,29 +400,30 @@ class _StepCounterCardState extends State<StepCounterCard> {
               ),
             ),
             const SizedBox(width: 6),
-            GestureDetector(
-              onTap: _refresh,
-              child: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: _refreshing
-                      ? const Color(0xFFFFD700).withValues(alpha: 0.12)
-                      : const Color(0xFF2A2A45),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: AnimatedRotation(
-                  turns: _refreshing ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 500),
-                  child: Icon(
-                    Icons.refresh_rounded,
+            if (!_isHistorical)
+              GestureDetector(
+                onTap: _refresh,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
                     color: _refreshing
-                        ? const Color(0xFFFFD700)
-                        : const Color(0xFFAAAAAA),
-                    size: 16,
+                        ? const Color(0xFFFFD700).withValues(alpha: 0.12)
+                        : const Color(0xFF2A2A45),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: AnimatedRotation(
+                    turns: _refreshing ? 1.0 : 0.0,
+                    duration: const Duration(milliseconds: 500),
+                    child: Icon(
+                      Icons.refresh_rounded,
+                      color: _refreshing
+                          ? const Color(0xFFFFD700)
+                          : const Color(0xFFAAAAAA),
+                      size: 16,
+                    ),
                   ),
                 ),
               ),
-            ),
             const SizedBox(width: 10),
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,

@@ -954,10 +954,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // ─── Header ───────────────────────────────────────────────────────────────────
 
   Widget _buildHeader() {
+    final isRunning = !_paused && !_log.completed;
     return SafeArea(
       bottom: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+        padding: const EdgeInsets.fromLTRB(4, 8, 12, 0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -977,45 +978,92 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                       letterSpacing: 1.5,
                     ),
                   ),
-                  Text(
-                    _durationStr,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 38,
-                      fontWeight: FontWeight.bold,
-                      height: 1.1,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Text(
+                        _durationStr,
+                        style: TextStyle(
+                          color: _paused
+                              ? const Color(0xFFE67E22)
+                              : Colors.white,
+                          fontSize: 38,
+                          fontWeight: FontWeight.bold,
+                          height: 1.1,
+                        ),
+                      ),
+                      if (!_log.completed) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: isRunning
+                                ? const Color(0xFF2ECC71).withValues(alpha: 0.15)
+                                : const Color(0xFFE67E22).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            isRunning ? 'RUNNING' : 'PAUSED',
+                            style: TextStyle(
+                              color: isRunning
+                                  ? const Color(0xFF2ECC71)
+                                  : const Color(0xFFE67E22),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),
             ),
             if (!_log.completed)
-              IconButton(
-                icon: Icon(
-                  _paused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                  color: Colors.white60,
-                  size: 22,
+              GestureDetector(
+                onTap: _togglePause,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: _paused
+                        ? const Color(0xFF2ECC71).withValues(alpha: 0.15)
+                        : const Color(0xFFE67E22).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _paused
+                          ? const Color(0xFF2ECC71).withValues(alpha: 0.4)
+                          : const Color(0xFFE67E22).withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _paused
+                            ? Icons.play_arrow_rounded
+                            : Icons.pause_rounded,
+                        color: _paused
+                            ? const Color(0xFF2ECC71)
+                            : const Color(0xFFE67E22),
+                        size: 18,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        _paused ? 'Resume' : 'Pause',
+                        style: TextStyle(
+                          color: _paused
+                              ? const Color(0xFF2ECC71)
+                              : const Color(0xFFE67E22),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                onPressed: () {
-                  setState(() {
-                    if (_paused) {
-                      // Resuming: shift start time forward by the paused duration
-                      final pausedDuration = DateTime.now()
-                          .difference(_workoutStartTime!)
-                          .inSeconds - _elapsedAtPause;
-                      _workoutStartTime = _workoutStartTime!
-                          .add(Duration(seconds: pausedDuration));
-                      _paused = false;
-                      _startDurationTimer();
-                    } else {
-                      // Pausing: snapshot current elapsed
-                      _elapsedAtPause = _elapsedSeconds;
-                      _paused = true;
-                      _durationTimer?.cancel();
-                    }
-                  });
-                  _saveTimerState();
-                },
               )
             else
               const SizedBox(width: 48),
@@ -1023,6 +1071,28 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         ),
       ),
     );
+  }
+
+  void _togglePause() {
+    setState(() {
+      if (_paused) {
+        // Resuming: shift start time forward by the paused duration
+        final pausedDuration = DateTime.now()
+                .difference(_workoutStartTime!)
+                .inSeconds -
+            _elapsedAtPause;
+        _workoutStartTime =
+            _workoutStartTime!.add(Duration(seconds: pausedDuration));
+        _paused = false;
+        _startDurationTimer();
+      } else {
+        // Pausing: snapshot current elapsed
+        _elapsedAtPause = _elapsedSeconds;
+        _paused = true;
+        _durationTimer?.cancel();
+      }
+    });
+    _saveTimerState();
   }
 
   // ─── Progress bar ─────────────────────────────────────────────────────────────

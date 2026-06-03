@@ -393,7 +393,7 @@ class _NutritionScreenState extends State<NutritionScreen> {
                     const SizedBox(height: 12),
                     WaterTrackerCard(date: _dateStr),
                     const SizedBox(height: 12),
-                    const StepCounterCard(),
+                    StepCounterCard(date: _dateStr),
                     const SizedBox(height: 12),
                     ..._activeMealKeys.map(_buildMealSection),
                   ],

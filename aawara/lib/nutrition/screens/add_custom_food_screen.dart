@@ -8,8 +8,15 @@ import '../../utils/safe_navigation.dart';
 class AddCustomFoodScreen extends StatefulWidget {
   final String? date;
   final String? meal;
+  // When provided, the screen is in edit mode and updates the existing food.
+  final Food? existingFood;
 
-  const AddCustomFoodScreen({super.key, this.date, this.meal});
+  const AddCustomFoodScreen({
+    super.key,
+    this.date,
+    this.meal,
+    this.existingFood,
+  });
 
   @override
   State<AddCustomFoodScreen> createState() => _AddCustomFoodScreenState();
@@ -27,6 +34,31 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
   String _unit = 'g';
   bool _saving = false;
 
+  bool get _isEditing => widget.existingFood != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final f = widget.existingFood;
+    if (f != null) {
+      // Pre-fill from existing food. Stored values are per 100g — convert
+      // back to per-serving values for display, since the form's macro
+      // section asks for "Macros per serving".
+      final scale = f.servingSize / 100.0;
+      _nameCtrl.text = f.name;
+      _sizeCtrl.text = _fmt(f.servingSize);
+      _unit = f.servingUnit;
+      _calCtrl.text = _fmt(f.calories * scale);
+      _protCtrl.text = _fmt(f.proteinG * scale);
+      _carbsCtrl.text = _fmt(f.carbsG * scale);
+      _fatCtrl.text = _fmt(f.fatG * scale);
+      if (f.fiberG != null) _fiberCtrl.text = _fmt(f.fiberG! * scale);
+    }
+  }
+
+  String _fmt(double v) =>
+      v == v.truncateToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+
   @override
   void dispose() {
     for (final c in [
@@ -41,21 +73,35 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
 
+    // User enters values per serving (e.g. 124.64 kcal per 33g scoop).
+    // The DB schema stores all nutrition per 100g, so convert.
+    final servingSize = double.parse(_sizeCtrl.text);
+    final scale = 100.0 / servingSize;
+
     final food = Food(
-      id: const Uuid().v4(),
+      id: widget.existingFood?.id ?? const Uuid().v4(),
       name: _nameCtrl.text.trim(),
-      calories: double.parse(_calCtrl.text),
-      proteinG: double.parse(_protCtrl.text),
-      carbsG: double.parse(_carbsCtrl.text),
-      fatG: double.parse(_fatCtrl.text),
-      fiberG: _fiberCtrl.text.isEmpty ? null : double.tryParse(_fiberCtrl.text),
-      servingSize: double.parse(_sizeCtrl.text),
+      calories: double.parse(_calCtrl.text) * scale,
+      proteinG: double.parse(_protCtrl.text) * scale,
+      carbsG: double.parse(_carbsCtrl.text) * scale,
+      fatG: double.parse(_fatCtrl.text) * scale,
+      fiberG: _fiberCtrl.text.isEmpty
+          ? null
+          : (double.tryParse(_fiberCtrl.text) ?? 0) * scale,
+      servingSize: servingSize,
       servingUnit: _unit,
       isCustom: true,
+      brand: widget.existingFood?.brand,
+      barcode: widget.existingFood?.barcode,
     );
 
-    final created = await WorkoutDatabase.instance.createCustomFood(food);
-    if (mounted) popAfterFocusSettles(context, created);
+    final db = WorkoutDatabase.instance;
+    if (_isEditing) {
+      await db.updateCustomFood(food);
+    } else {
+      await db.createCustomFood(food);
+    }
+    if (mounted) popAfterFocusSettles(context, food);
   }
 
   @override
@@ -70,8 +116,8 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
           onPressed: () => popAfterFocusSettles(context),
         ),
-        title: const Text('Create Custom Food',
-            style: TextStyle(
+        title: Text(_isEditing ? 'Edit Custom Food' : 'Create Custom Food',
+            style: const TextStyle(
                 color: Colors.white,
                 fontSize: 18,
                 fontWeight: FontWeight.w600)),
@@ -160,8 +206,8 @@ class _AddCustomFoodScreenState extends State<AddCustomFoodScreen> {
                         height: 20,
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: Colors.black))
-                    : const Text('Save Food',
-                        style: TextStyle(
+                    : Text(_isEditing ? 'Save Changes' : 'Save Food',
+                        style: const TextStyle(
                             fontWeight: FontWeight.bold, fontSize: 16)),
               ),
             ),

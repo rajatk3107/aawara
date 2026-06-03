@@ -13,7 +13,10 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 - Interactive 7-day week strip — tap any day to preview that day's planned workout
 - Today's workout card showing planned exercises with a one-tap Start button
 - Stats strip: current streak, workouts this week, total weight lifted, monthly count, and today's volume
-- Quick access 2×2 grid (Quick Start, Exercise Library, Progress, History)
+- **Step counter card** — live step count, progress bar, edit button, and refresh
+- **Protein / calorie pill** — tappable, navigates directly to the Nutrition screen
+- **Quick access grid** — Progress, Exercises, Quick Start, History, and **Body Measurements**
+- **Date-aware data** — when you tap a different day on the week strip, **every** widget on the home screen updates to reflect that date: workout logs, protein/calorie pill, water intake, wellness card, body weight (as-of-date lookup), and step count
 
 **Quick Start**
 - PPL (Push/Pull/Legs) presets: Push A/B, Pull A/B, Legs A/B — each with 6–7 curated exercises
@@ -23,6 +26,9 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 **Workout Logging**
 - Elapsed timer during active workouts; shows stored duration on completed workouts
+- **RUNNING / PAUSED badge** next to the timer with colored chip (green when running, orange when paused) — the timer also turns orange when paused, white when running
+- **Prominent Pause / Resume button** at the top-right of the workout screen with text labels and matching colors; manual control only — the timer never auto-pauses when you navigate to other screens
+- **Timer survives navigation** — uses a wall-clock anchor persisted to SharedPreferences, so elapsed time stays accurate regardless of how long you spend on other tabs/screens
 - Accordion layout — tap any exercise to expand its set list in-place
 - Drag handles to reorder exercises during an active session
 - Set row controls: stepper (+/−) for weight and reps, tap the value to type directly
@@ -64,19 +70,50 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 ### Nutrition Tracker
 
-**Daily Log**
-- Log food across four meals: Breakfast, Lunch, Dinner, Snack
-- Daily macro summary ring (calories, protein, carbs, fat) with configurable goals
-- Navigate between dates with a date strip
+**Dynamic Meal System**
+- Start with 5 meals (Meal 1–5); create additional meals (Meal 6, 7, …) at any time
+- **Custom meal names** — long-press any meal header or use the ⋮ menu → Rename meal. Names persist across app restarts
+- **Delete entire meal** — ⋮ menu → Delete meal removes the slot and all its food log entries permanently; at least one meal must remain
+- Previous fixed meals (Breakfast/Lunch/Dinner/Snack) automatically migrated to Meal 1–4
+
+**Meal Picker**
+- Tapping **Add Food** shows a meal picker sheet listing all active meals
+- "Create new meal" option at the bottom — enter a name and the new meal slot is created instantly; food search opens into it immediately
+
+**Editable Food Entries**
+- Every logged food entry has a **⋮ overflow menu** with:
+  - **Edit quantity** — opens a quantity picker (by count or by grams) with live macro preview; save updates the entry and all daily totals
+  - **Move to meal** — reassign an entry to any other meal without re-logging
+  - **Delete** — confirmation dialog; removes the entry and recalculates all totals
+- **Delete all items** — ⋮ on the meal header removes all entries in that meal for the current date
 
 **Food Database**
-- ~210 Indian foods sourced from IFCT 2017 (Indian Food Composition Tables, NIN) across 18 categories: Cereals, Pulses, Vegetables, Fruits, Dairy, Eggs, Poultry, Fish, Nuts, Indian Breads, South Indian, Rice Dishes, Dal & Curry, Snacks, Sweets, Beverages, Oils, and International/Gym foods
-- Add custom foods with full macro breakdown
+- ~220 Indian and international foods sourced from IFCT 2017 and USDA FoodData Central across 19 categories
+- Extended nutritional data for all foods: **sugar, sodium, saturated fat, trans fat, cholesterol** in addition to the standard macros
+- Supplements and branded foods: BeastLife Creatine Unflavoured, BeastLife Isorich Whey Protein Isolate, NATURALTEIN Natural Whey Protein Isolate Chocolate, True Elements Steel Cut Oats, BeastLife Pre-Workout Orange Flavour, BeastLife Multivitamin Tablets, NATURALTEIN Omega-3 Fish Oil 1250 mg Softgel, Indian Cow Milk without Malai, Indian Buffalo Milk without Malai
+- Corrected nut values to USDA: Almonds, Cashews, Walnuts, Pistachios
+
+**Custom Foods — Create, Edit, Delete**
+- "Create custom" entry point in the food search sheet; enter name, serving size, unit, and macros **per serving** (no need to convert to per-100 g — the app does that internally so calculations stay accurate at any serving size)
+- "Custom" badge displayed next to user-created foods in the search results
+- **⋮ menu on every custom food row** — Edit (re-opens the form pre-filled with current values) or Delete (also removes any logged entries that referenced it)
+- Seeded foods are read-only; the ⋮ menu only appears on `is_custom = 1` rows
+
+**Correct Nutrition Scaling**
+- All nutritional values stored per 100 g; correctly scaled by `quantity × servingSize / 100` when displayed and summed — accurate for any serving size (30 g almonds, 33 g scoop of whey, 7 g pre-workout, etc.)
 
 **Flexible Food Logging**
 - **By count** — log by natural unit: eggs, bowls, rotis, glasses, pieces, scoops, etc. with smart step sizes
-- **By grams** — enter exact weight; equivalent unit count shown below the field
+- **By grams** — enter exact weight including decimals (e.g. 37.5 g); equivalent unit count shown below the field
 - Switch between modes freely — values stay in sync
+- **Decimal quantities** — 0.25, 0.5, 1.5 bowls, 2.75 scoops, etc. supported in both modes
+
+**TDEE Calculator with Custom Overrides**
+- Mifflin-St Jeor BMR → TDEE with activity multiplier and goal offset
+- **Tap any result value** (calories, protein, carbs, fat) to override with a custom number
+- Custom values highlighted with brighter border; individual or bulk reset to calculated
+- Overrides persist across app restarts via SharedPreferences
+- "Apply as my goals" saves the final values (custom override wins) to the nutrition goals
 
 **Barcode Scanner**
 - Tap the barcode icon in the food search sheet to scan a product barcode via camera
@@ -100,6 +137,39 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 ---
 
+### Step Tracking
+
+**Android**
+- Persistent foreground service with hardware pedometer
+- Survives app kill; midnight baseline reset with device-reboot handling
+- Foreground notification shows live step count and goal progress
+- Health Connect integration — Samsung Watch and other wearable data merged automatically
+
+**iOS**
+- Reads from Apple Health (HealthKit) — zero battery impact, no background service needed
+- Refreshes on foreground resume and background app refresh
+
+**Manual Edit**
+- Set today's step total directly (e.g. "I walked 8,000 steps") rather than adding an increment
+- Correction stored as an offset on top of the automatic count — sensor updates continue moving from where they left off
+- Foreground notification and UI update immediately on edit
+- Step counter card on the home screen with edit (✏️) and refresh (↺) buttons
+
+**Date-Aware Step Counter**
+- The step counter card on home and Nutrition screens is wired to the selected date
+- **Today** — live mode with stream subscription, edit (offset-based), and refresh
+- **Past date** — historical mode: loads the stored value from the `step_logs` row for that date, labelled "Steps · past day"
+- Editing a past date writes the new value **directly** to that date's row (no offset logic, no cross-day contamination) so you can correct historical entries without affecting any other day
+
+---
+
+### Body Measurements
+- Log waist, chest, arms, thighs, and any other dimension with date stamps
+- Accessible from home screen Quick Access grid and from Progress screen
+- Trend view per measurement type
+
+---
+
 ### Wellness Log
 - Daily entry for sleep hours, energy level (1–5), and soreness level (1–5)
 - Optional notes per entry
@@ -114,19 +184,14 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 ### Settings & Data Management
 
-**Export (Filtered Workout Export)**
-- Export workout logs filtered by date range and optionally by a single exercise
-- Formats: CSV (spreadsheet-friendly) or JSON (structured)
-- Preview shows workout and set counts before exporting
-
-**Full Backup**
-- One tap exports everything: workouts, nutrition entries, custom foods, water logs, meal presets, body weight, wellness logs, achievements, exercise PRs, nutrition goals, day overrides, and quick-start templates
-- Output is a single JSON file (schema_version: 3)
+**Export**
+- **Export File** (CSV / JSON) — filtered by date range and optionally by a single exercise; date range respected for all data types including PRs, nutrition, body weight, wellness, steps, and measurements
+- **Export to AI** — Markdown file with workouts, nutrition, wellness, PRs, and notes; respects the selected date range so you can export just "last week" for AI analysis
+- **Full Backup** — exports everything (workouts, nutrition, custom foods, water logs, meal presets, body weight, wellness logs, achievements, exercise PRs, nutrition goals, step logs, body measurements, notes, meal templates, quick-start templates) as a single JSON file
 
 **Restore from Backup**
 - Import any Aawara JSON export — full backups or legacy workout-only exports
 - Safe merge: existing entries are never overwritten; duplicates are skipped
-- Result card shows per-type import counts (workouts, nutrition entries, custom foods, water logs, etc.)
 
 **Profile & Notifications**
 - Profile photo and name (set during onboarding, editable in settings)
@@ -145,6 +210,8 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 | Image handling | image_picker + image_cropper |
 | Barcode scanning | mobile_scanner |
 | HTTP / Food API | http (Open Food Facts) |
+| Step counting | pedometer + flutter_background_service |
+| Health platform | health (Health Connect / HealthKit) |
 | Data sharing | share_plus |
 | File import | file_picker |
 | Preferences | shared_preferences |
@@ -158,15 +225,15 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 ```
 lib/
-├── main.dart                          # App entry, theme config
-├── main_screen.dart                   # Bottom nav shell
+├── main.dart
+├── main_screen.dart                     # Bottom nav shell
 ├── splash_screen.dart
 ├── onboarding_screen.dart
 ├── home_screen.dart
 ├── settings_screen.dart
-├── privacy_policy_screen.dart
 ├── services/
-│   └── notification_service.dart
+│   ├── notification_service.dart
+│   └── step_tracking_service.dart      # Android background service + iOS HealthKit
 ├── notes/
 │   ├── note_model.dart
 │   ├── notes_database.dart
@@ -174,22 +241,25 @@ lib/
 │   └── note_editor_screen.dart
 ├── nutrition/
 │   ├── models/
-│   │   └── nutrition_models.dart      # Food, NutritionEntry, WaterLog, MealPreset, …
+│   │   └── nutrition_models.dart       # Food, NutritionEntry, WaterLog, MealPreset, …
 │   ├── screens/
-│   │   ├── nutrition_screen.dart      # Daily log, macro ring, meal sections
+│   │   ├── nutrition_screen.dart       # Dynamic meals, macro ring, editable entries
 │   │   ├── nutrition_goals_screen.dart
+│   │   ├── tdee_calculator_screen.dart # TDEE + custom goal overrides
 │   │   ├── meal_presets_screen.dart
 │   │   ├── barcode_scanner_screen.dart
 │   │   └── add_custom_food_screen.dart
 │   └── widgets/
-│       ├── add_food_sheet.dart        # Food search, count/gram toggle, barcode
+│       ├── add_food_sheet.dart         # Food search, count/gram toggle, barcode
+│       ├── edit_food_entry_sheet.dart  # Edit quantity + move to meal for logged entries
+│       ├── meal_picker_sheet.dart      # Meal selector + create new meal
 │       └── water_tracker_card.dart
 └── workout/
     ├── database/
-    │   └── workout_database.dart      # SQLite singleton, all migrations
+    │   └── workout_database.dart       # SQLite singleton, all migrations (v19)
     ├── models/
-    │   ├── exercise.dart              # Exercise, CardioType enum
-    │   ├── workout_log.dart           # WorkoutLog, ExerciseLog, SetLog
+    │   ├── exercise.dart
+    │   ├── workout_log.dart
     │   └── workout_plan_day.dart
     ├── screens/
     │   ├── workout_home_screen.dart
@@ -200,16 +270,19 @@ lib/
     │   ├── workout_plan_screen.dart
     │   ├── exercise_library_screen.dart
     │   ├── progress_screen.dart
+    │   ├── body_measurements_screen.dart
     │   ├── exercise_progress_screen.dart
     │   ├── exercise_progress_detail_screen.dart
     │   ├── monthly_summary_screen.dart
     │   ├── achievements_screen.dart
     │   ├── export_screen.dart
-    │   └── import_screen.dart
+    │   └── step_goal_screen.dart
     └── widgets/
         ├── exercise_tile.dart
         ├── muscle_group_filter.dart
         ├── set_log_tile.dart
+        ├── step_counter_card.dart      # Step count, edit, refresh
+        ├── workout_heatmap.dart
         └── empty_state_widget.dart
 ```
 
@@ -217,7 +290,7 @@ lib/
 
 ## Database
 
-Single SQLite file (`workout.db`) managed by a singleton `WorkoutDatabase`. All migrations are strictly additive — existing user data is never dropped or modified.
+Single SQLite file (`workout.db`) managed by a singleton `WorkoutDatabase`. All migrations are strictly additive — existing user data is never dropped or modified without explicit user action.
 
 | Table | Purpose |
 |---|---|
@@ -230,18 +303,23 @@ Single SQLite file (`workout.db`) managed by a singleton `WorkoutDatabase`. All 
 | `day_overrides` | Per-date exercise list overrides |
 | `quick_start_templates` | Saved PPL preset overrides |
 | `body_weight_logs` | Daily body weight entries |
+| `body_measurements` | Per-type measurement history (waist, chest, etc.) |
 | `exercise_prs` | Personal records per exercise (best 1RM) |
 | `wellness_logs` | Daily sleep, energy, and soreness entries |
 | `achievements_unlocked` | Unlocked achievement IDs with timestamps |
-| `foods` | Food library (~210 seeded Indian foods + custom, `is_custom` flag) |
-| `nutrition_logs` | One row per date with nutrition entries |
+| `foods` | Food library (~220 seeded foods + custom; includes sugar, sodium, sat fat, trans fat, cholesterol) |
+| `nutrition_logs` | One row per date |
 | `nutrition_entries` | Individual food items per meal per date |
 | `nutrition_goals` | User-configured daily macro targets |
+| `meal_templates` | Custom meal display names (meal_key → name) |
+| `meal_slots` | Active meal slots with display order; drives which meals appear in the UI |
 | `meal_presets` | Saved meal combos |
 | `meal_preset_items` | Foods within a meal preset |
 | `water_logs` | Daily water intake (glasses drunk + target) |
+| `step_logs` | Daily step count and goal |
+| `progress_photos` | Body progress photos with date |
 
-Current schema version: **10**
+Current schema version: **19**
 
 ---
 
@@ -255,23 +333,25 @@ flutter pub get
 flutter run
 ```
 
-**Run on Android emulator**:
+**Run on Android**:
 ```bash
-flutter devices                        # find device id
+flutter devices
 flutter run -d <device-id>
 ```
 
-**Build release APK (arm64)**:
+**Build release APK**:
 ```bash
-flutter build apk --release --target-platform android-arm64
-adb install build/app/outputs/flutter-apk/app-release.apk
+flutter build apk --release
+adb install -r build/app/outputs/flutter-apk/app-release.apk
 ```
+
+> Always use `adb install -r` (replace) — never uninstall, as the SQLite database lives in the app's private storage and will be lost on uninstall.
 
 ---
 
 ## Data Safety
 
-All data is stored locally. The only outbound network request is the optional Open Food Facts barcode lookup — no personal data is sent, and it is only triggered when the user scans a barcode. The SQLite database lives in the app's private storage directory. Use the Full Backup feature in Settings to export all your data as a JSON file at any time.
+All data is stored locally. The only outbound network request is the optional Open Food Facts barcode lookup — no personal data is sent, and it is only triggered when the user scans a barcode. The SQLite database lives in the app's private storage directory. Use **Full Backup** in Settings to export all your data as a JSON file at any time.
 
 ---
 
@@ -286,4 +366,7 @@ All data is stored locally. The only outbound network request is the optional Op
 | 1.4 | Nutrition tracker — daily food log, macro ring, 210-item Indian food database (IFCT 2017), custom foods, nutrition goals, wellness log, achievements, monthly summary |
 | 1.5 | Rest timer with configurable duration (long-press) + triple haptic; water intake tracker with animated dot grid; meal presets (save & log combos in one tap) |
 | 1.6 | Barcode scanner (Open Food Facts API, camera, deduplication); by-count / by-grams food logging toggle with natural unit labels |
-| 1.7 | Full data backup & restore — exports all 15 user-data tables to a single JSON file; safe merge import with per-type result counts |
+| 1.7 | Full data backup & restore — exports all user-data tables to a single JSON file; safe merge import with per-type result counts |
+| 1.8 | Step tracking (Android foreground service + iOS HealthKit); Samsung Health Connect integration; manual step total override; step counter card on home screen |
+| 1.9 | Dynamic meal system — numbered meals (Meal 1–5+), custom names, create/delete meal slots, meal picker when adding food; per-entry ⋮ menu (edit quantity, move to meal, delete); delete entire meal; decimal portion sizes; nutrition formula fix (correct per-serving scaling for all foods); extended nutrition fields (sugar, sodium, saturated fat, trans fat, cholesterol); TDEE custom goal overrides; AI export respects date range; body measurements quick-access tile; protein tile navigates to nutrition |
+| 1.10 | Date-aware home screen — protein/calorie pill, water, wellness, weight, and step counter all reflect the selected date; new `getBodyWeightAsOf(date)` returns the as-of-date weight; step counter card now accepts a `date` param and switches between live and historical mode; historical step values are editable and write directly to that date's `step_logs` row; custom food create-form now stores values correctly (per-serving → per-100 g conversion); ⋮ menu on custom food rows in the search list (Edit / Delete); workout timer header redesigned — RUNNING / PAUSED badge with green/orange color coding, labeled Pause / Resume button, timer never auto-pauses on navigation; nut nutrition values corrected to USDA (Almonds, Cashews, Walnuts, Pistachios); two new milk variants added (Indian Cow / Buffalo milk without malai) |
