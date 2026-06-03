@@ -6,6 +6,7 @@ import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../widgets/empty_state_widget.dart';
 import '../widgets/workout_heatmap.dart';
+import '../widgets/weekly_insights_card.dart';
 import 'body_measurements_screen.dart';
 import 'exercise_progress_screen.dart';
 import 'progress_photos_screen.dart';
@@ -296,6 +297,8 @@ class _ProgressScreenState extends State<ProgressScreen>
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const WeeklyInsightsCard(),
+        const SizedBox(height: 16),
         _buildOverviewCards(),
         const SizedBox(height: 16),
         _buildExerciseTrackerBanner(),

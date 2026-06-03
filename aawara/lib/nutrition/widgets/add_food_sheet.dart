@@ -39,6 +39,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
   final _gramsCtrl = TextEditingController();
 
   List<Food> _results = [];
+  List<Food> _recentFoods = [];
   bool _searching = false;
   Food? _selected;
   double _quantity = 1.0; // always in servings internally
@@ -53,6 +54,12 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
     super.initState();
     _search('');
     _loadPresets();
+    _loadRecentFoods();
+  }
+
+  Future<void> _loadRecentFoods() async {
+    final foods = await _db.getRecentlyLoggedFoods();
+    if (mounted) setState(() => _recentFoods = foods);
   }
 
   @override
@@ -332,16 +339,7 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
                         ? const Center(
                             child: CircularProgressIndicator(
                                 color: Color(0xFFFFD700), strokeWidth: 2))
-                        : _results.isEmpty
-                            ? const Center(
-                                child: Text('No foods found',
-                                    style:
-                                        TextStyle(color: Color(0xFF555577))))
-                            : ListView.builder(
-                                itemCount: _results.length,
-                                itemBuilder: (_, i) =>
-                                    _buildFoodTile(_results[i]),
-                              ),
+                        : _buildSearchBody(),
           ),
         ],
       ),
@@ -495,6 +493,92 @@ class _AddFoodSheetState extends State<AddFoodSheet> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // Search-tab body: recent foods row at top (only when no search query),
+  // followed by either the search results or empty-state.
+  Widget _buildSearchBody() {
+    final hasQuery = _searchCtrl.text.trim().isNotEmpty;
+    if (_results.isEmpty) {
+      return Column(
+        children: [
+          if (!hasQuery && _recentFoods.isNotEmpty) _buildRecentChips(),
+          const Expanded(
+            child: Center(
+              child: Text('No foods found',
+                  style: TextStyle(color: Color(0xFF555577))),
+            ),
+          ),
+        ],
+      );
+    }
+    return ListView.builder(
+      itemCount: _results.length + (!hasQuery && _recentFoods.isNotEmpty ? 1 : 0),
+      itemBuilder: (_, i) {
+        if (!hasQuery && _recentFoods.isNotEmpty) {
+          if (i == 0) return _buildRecentChips();
+          return _buildFoodTile(_results[i - 1]);
+        }
+        return _buildFoodTile(_results[i]);
+      },
+    );
+  }
+
+  Widget _buildRecentChips() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.history_rounded,
+                  size: 13, color: Color(0xFF888899)),
+              const SizedBox(width: 5),
+              Text(
+                'RECENT',
+                style: const TextStyle(
+                    color: Color(0xFF888899),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 34,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _recentFoods.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 6),
+              itemBuilder: (_, i) {
+                final f = _recentFoods[i];
+                return GestureDetector(
+                  onTap: () => _selectFood(f),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0D0D1A),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: const Color(0xFF2A2A45)),
+                    ),
+                    child: Text(
+                      f.name,
+                      style: const TextStyle(
+                          color: Color(0xFFCCCCDD),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

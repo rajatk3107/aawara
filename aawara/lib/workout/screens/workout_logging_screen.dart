@@ -27,6 +27,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   final Map<String, Exercise> _exercises = {};
   final Map<String, String?> _hints = {}; // exLogId → "weight × reps" hint
+  final Map<String, ({double weight, String reason})?> _suggestions = {}; // exLogId → progression target
   bool _loading = true;
 
   int _elapsedSeconds = 0;
@@ -191,6 +192,14 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
           _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
         }
       }
+      // Build progression suggestion from last completed session (excluding today's)
+      if (ex != null && !ex.isCardio) {
+        final last = await _db.getLastCompletedSetsForExercise(
+            exLog.exerciseId, _log.date);
+        if (last != null) {
+          _suggestions[exLog.id] = _computeSuggestion(last.sets);
+        }
+      }
 
       final override = prefs.getInt('rest_timer_${exLog.exerciseId}');
       if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
@@ -216,6 +225,33 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   String _fmtW(double w) =>
       w == w.truncateToDouble() ? w.toInt().toString() : w.toStringAsFixed(1);
+
+  // Suggests a target weight based on last session's performance.
+  // Double-progression rule: when min reps on top set ≥ 10 → bump 2.5 kg;
+  // otherwise maintain weight and aim to add reps. Returns null if no
+  // usable weight/reps data.
+  ({double weight, String reason})? _computeSuggestion(List<SetLog> lastSets) {
+    final wReps = lastSets
+        .where((s) => s.weight != null && s.reps != null && s.weight! > 0)
+        .toList();
+    if (wReps.isEmpty) return null;
+    double maxW = 0;
+    for (final s in wReps) {
+      if (s.weight! > maxW) maxW = s.weight!;
+    }
+    final topSets = wReps.where((s) => s.weight == maxW).toList();
+    int minReps = topSets.first.reps!;
+    for (final s in topSets) {
+      if (s.reps! < minReps) minReps = s.reps!;
+    }
+    if (minReps >= 10) {
+      return (weight: maxW + 2.5, reason: 'crushed last time');
+    } else if (minReps >= 6) {
+      return (weight: maxW, reason: 'add a rep');
+    } else {
+      return (weight: maxW, reason: 'lock in form');
+    }
+  }
 
   String? _hintLine(String exLogId) {
     final h = _hints[exLogId];
@@ -1356,6 +1392,46 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                 child: Text(
                   _hintLine(exLog.id)!,
                   style: const TextStyle(color: Color(0xFF888899), fontSize: 12),
+                ),
+              ),
+            // Progressive-overload suggestion
+            if (!_log.completed && _suggestions[exLog.id] != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFD700).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: const Color(0xFFFFD700).withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.trending_up_rounded,
+                          color: Color(0xFFFFD700), size: 14),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: RichText(
+                          text: TextSpan(
+                            style: const TextStyle(
+                                color: Color(0xFFCCCCDD), fontSize: 12),
+                            children: [
+                              const TextSpan(text: 'Try '),
+                              TextSpan(
+                                text: '${_fmtW(_suggestions[exLog.id]!.weight)} kg',
+                                style: const TextStyle(
+                                    color: Color(0xFFFFD700),
+                                    fontWeight: FontWeight.bold),
+                              ),
+                              TextSpan(
+                                  text: ' · ${_suggestions[exLog.id]!.reason}'),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
 

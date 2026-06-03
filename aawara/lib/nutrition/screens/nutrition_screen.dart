@@ -105,6 +105,33 @@ class _NutritionScreenState extends State<NutritionScreen> {
     _load();
   }
 
+  Future<void> _copyMealFromYesterday(String mealKey, String displayName) async {
+    final yesterday = _selectedDate.subtract(const Duration(days: 1));
+    final fromStr = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+    final count = await _db.copyMealEntries(
+      fromDate: fromStr,
+      toDate: _dateStr,
+      mealType: mealKey,
+    );
+    if (!mounted) return;
+    if (count == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('No items logged in $displayName yesterday'),
+        backgroundColor: const Color(0xFF1A1A2E),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Copied $count item${count == 1 ? '' : 's'} from yesterday'),
+      backgroundColor: const Color(0xFF1A1A2E),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+    _load();
+  }
+
   Future<void> _deleteMeal(String mealKey, String displayName) async {
     final entries = _totals.entries.where((e) => e.mealType == mealKey).toList();
     if (entries.isEmpty) {
@@ -591,6 +618,8 @@ class _NutritionScreenState extends State<NutritionScreen> {
                       switch (action) {
                         case _MealAction.rename:
                           _renameMeal(mealKey);
+                        case _MealAction.copyFromYesterday:
+                          _copyMealFromYesterday(mealKey, name);
                         case _MealAction.savePreset:
                           _saveAsPreset(mealKey);
                         case _MealAction.deleteAll:
@@ -602,6 +631,8 @@ class _NutritionScreenState extends State<NutritionScreen> {
                     itemBuilder: (_) => [
                       _mealMenuItem(_MealAction.rename,
                           Icons.edit_rounded, 'Rename meal'),
+                      _mealMenuItem(_MealAction.copyFromYesterday,
+                          Icons.content_copy_rounded, 'Copy from yesterday'),
                       if (entries.isNotEmpty)
                         _mealMenuItem(_MealAction.savePreset,
                             Icons.bookmark_add_outlined, 'Save as preset'),
@@ -827,4 +858,4 @@ class _NutritionScreenState extends State<NutritionScreen> {
 
 enum _EntryAction { edit, move, delete }
 
-enum _MealAction { rename, savePreset, deleteAll, deleteMeal }
+enum _MealAction { rename, savePreset, deleteAll, deleteMeal, copyFromYesterday }

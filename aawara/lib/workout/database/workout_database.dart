@@ -1584,6 +1584,38 @@ class WorkoutDatabase {
     await db.delete('workout_logs', where: 'id = ?', whereArgs: [id]);
   }
 
+  // Returns the most-recent completed sets for [exerciseId] from a session
+  // before [beforeDate]. Used to power progressive-overload suggestions.
+  // Returns null if there's no prior data.
+  Future<({String date, List<SetLog> sets})?> getLastCompletedSetsForExercise(
+    String exerciseId,
+    String beforeDate,
+  ) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT wl.date, el.id AS exercise_log_id
+      FROM workout_logs wl
+      INNER JOIN exercise_logs el ON el.workout_log_id = wl.id
+      WHERE el.exercise_id = ?
+        AND wl.date < ?
+        AND wl.completed = 1
+      ORDER BY wl.date DESC
+      LIMIT 1
+    ''', [exerciseId, beforeDate]);
+    if (rows.isEmpty) return null;
+    final exerciseLogId = rows.first['exercise_log_id'] as String;
+    final date = rows.first['date'] as String;
+    final setRows = await db.query(
+      'set_logs',
+      where: 'exercise_log_id = ? AND is_completed = 1',
+      whereArgs: [exerciseLogId],
+      orderBy: 'set_number ASC',
+    );
+    if (setRows.isEmpty) return null;
+    final sets = setRows.map(SetLog.fromMap).toList();
+    return (date: date, sets: sets);
+  }
+
   Future<ExerciseLog> createExerciseLog(ExerciseLog exLog) async {
     final db = await database;
     await db.insert('exercise_logs', exLog.toMap());
@@ -3785,6 +3817,96 @@ class WorkoutDatabase {
     return id;
   }
 
+  // Returns aggregated weekly training and nutrition metrics for the
+  // [fromDate, toDate] inclusive range (both 'YYYY-MM-DD').
+  Future<WeeklyInsights> getWeeklyInsights({
+    required String fromDate,
+    required String toDate,
+  }) async {
+    final db = await database;
+
+    // Sets per muscle group from completed sessions in range
+    final muscleRows = await db.rawQuery('''
+      SELECT e.muscle_group AS muscle_group, COUNT(sl.id) AS set_count
+      FROM set_logs sl
+      INNER JOIN exercise_logs el ON el.id = sl.exercise_log_id
+      INNER JOIN workout_logs wl ON wl.id = el.workout_log_id
+      INNER JOIN exercises e ON e.id = el.exercise_id
+      WHERE wl.date >= ? AND wl.date <= ?
+        AND wl.completed = 1 AND sl.is_completed = 1
+      GROUP BY e.muscle_group
+    ''', [fromDate, toDate]);
+    final setsPerMuscleGroup = <String, int>{};
+    for (final r in muscleRows) {
+      final g = r['muscle_group'] as String?;
+      if (g == null || g.isEmpty) continue;
+      setsPerMuscleGroup[g] = (r['set_count'] as int);
+    }
+
+    final trainingDays = Sqflite.firstIntValue(await db.rawQuery('''
+      SELECT COUNT(DISTINCT date) FROM workout_logs
+      WHERE date >= ? AND date <= ? AND completed = 1
+    ''', [fromDate, toDate])) ?? 0;
+
+    // Average daily nutrition. Calculated using per-100g formula consistent
+    // with NutritionEntry: kcal_total = (food.calories × ne.quantity × food.serving_size / 100)
+    final nutRows = await db.rawQuery('''
+      SELECT nl.date,
+             SUM(f.calories * ne.quantity * f.serving_size / 100.0) AS cal,
+             SUM(f.protein_g * ne.quantity * f.serving_size / 100.0) AS prot
+      FROM nutrition_logs nl
+      INNER JOIN nutrition_entries ne ON ne.log_id = nl.id
+      INNER JOIN foods f ON f.id = ne.food_id
+      WHERE nl.date >= ? AND nl.date <= ?
+      GROUP BY nl.date
+    ''', [fromDate, toDate]);
+    double totalCal = 0, totalPro = 0;
+    for (final r in nutRows) {
+      totalCal += (r['cal'] as num?)?.toDouble() ?? 0;
+      totalPro += (r['prot'] as num?)?.toDouble() ?? 0;
+    }
+    final nutDays = nutRows.length;
+
+    // Average daily water across days that had any entry
+    final waterRows = await db.query(
+      'water_logs',
+      where: 'date >= ? AND date <= ?',
+      whereArgs: [fromDate, toDate],
+    );
+    double totalGlasses = 0;
+    for (final r in waterRows) {
+      totalGlasses += (r['glasses_drunk'] as num?)?.toDouble() ?? 0;
+    }
+    final waterDays = waterRows.length;
+
+    // Most recent body weight within the range
+    final bwRows = await db.query(
+      'body_weight_logs',
+      where: 'date >= ? AND date <= ?',
+      whereArgs: [fromDate, toDate],
+      orderBy: 'date DESC',
+      limit: 1,
+    );
+    final avgWeightKg = bwRows.isEmpty
+        ? null
+        : (bwRows.first['weight_kg'] as num).toDouble();
+
+    final daysInRange = DateTime.parse(toDate)
+            .difference(DateTime.parse(fromDate))
+            .inDays +
+        1;
+
+    return WeeklyInsights(
+      setsPerMuscleGroup: setsPerMuscleGroup,
+      trainingDays: trainingDays,
+      avgProteinG: nutDays > 0 ? totalPro / nutDays : 0,
+      avgCalories: nutDays > 0 ? totalCal / nutDays : 0,
+      avgGlassesWater: waterDays > 0 ? totalGlasses / waterDays : 0,
+      avgWeightKg: avgWeightKg,
+      daysInRange: daysInRange,
+    );
+  }
+
   Future<List<Food>> searchFoods(String query) async {
     final db = await database;
     final maps = await db.query(
@@ -3795,6 +3917,56 @@ class WorkoutDatabase {
       limit: 50,
     );
     return maps.map(Food.fromMap).toList();
+  }
+
+  // Returns the most recently logged foods (unique), most-recent first.
+  // Used to power the "Recent" chips row in the food search sheet.
+  Future<List<Food>> getRecentlyLoggedFoods({int limit = 15}) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT f.* FROM foods f
+      INNER JOIN (
+        SELECT food_id, MAX(created_at) AS latest_at
+        FROM nutrition_entries
+        GROUP BY food_id
+      ) recent ON recent.food_id = f.id
+      ORDER BY recent.latest_at DESC
+      LIMIT ?
+    ''', [limit]);
+    return rows.map(Food.fromMap).toList();
+  }
+
+  // Copies all food entries from one date+meal into another date+meal.
+  // Used by the "Copy from yesterday" action. Returns the number of entries copied.
+  Future<int> copyMealEntries({
+    required String fromDate,
+    required String toDate,
+    required String mealType,
+  }) async {
+    final db = await database;
+    final fromLogId = await _getOrCreateNutritionLog(fromDate);
+    final toLogId = await _getOrCreateNutritionLog(toDate);
+    final source = await db.query(
+      'nutrition_entries',
+      where: 'log_id = ? AND meal_type = ?',
+      whereArgs: [fromLogId, mealType],
+    );
+    if (source.isEmpty) return 0;
+    final uuid = const Uuid();
+    final now = DateTime.now().toIso8601String();
+    final batch = db.batch();
+    for (final row in source) {
+      batch.insert('nutrition_entries', {
+        'id': uuid.v4(),
+        'log_id': toLogId,
+        'food_id': row['food_id'],
+        'meal_type': mealType,
+        'quantity': row['quantity'],
+        'created_at': now,
+      });
+    }
+    await batch.commit(noResult: true);
+    return source.length;
   }
 
   Future<NutritionTotals> getFoodsForDate(String date) async {

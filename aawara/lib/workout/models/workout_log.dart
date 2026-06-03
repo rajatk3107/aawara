@@ -201,3 +201,23 @@ class WorkoutLog {
   int get totalSets => exercises.fold(0, (s, e) => s + e.sets.length);
   double get totalVolume => exercises.fold(0.0, (s, e) => s + e.totalVolume);
 }
+
+class WeeklyInsights {
+  final Map<String, int> setsPerMuscleGroup;
+  final int trainingDays;
+  final double avgProteinG;
+  final double avgCalories;
+  final double avgGlassesWater;
+  final double? avgWeightKg;
+  final int daysInRange;
+
+  const WeeklyInsights({
+    required this.setsPerMuscleGroup,
+    required this.trainingDays,
+    required this.avgProteinG,
+    required this.avgCalories,
+    required this.avgGlassesWater,
+    required this.avgWeightKg,
+    required this.daysInRange,
+  });
+}
