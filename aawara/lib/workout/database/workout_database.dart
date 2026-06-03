@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 import '../models/exercise.dart';
 import '../models/plateau_alert.dart';
 import '../models/progress_photo.dart';
+import '../models/supplement.dart';
+import '../models/lab_value.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
 import '../../nutrition/models/nutrition_models.dart';
@@ -27,7 +29,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 19,
+      version: 20,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -52,6 +54,47 @@ class WorkoutDatabase {
     if (oldVersion < 17) await _migrateV17(db);
     if (oldVersion < 18) await _migrateV18(db);
     if (oldVersion < 19) await _migrateV19(db);
+    if (oldVersion < 20) await _migrateV20(db);
+  }
+
+  Future<void> _migrateV20(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        dose TEXT,
+        time_hhmm TEXT NOT NULL,
+        notes TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplement_logs (
+        supplement_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        taken_at TEXT NOT NULL,
+        PRIMARY KEY (supplement_id, date)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS lab_values (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT,
+        ref_low REAL,
+        ref_high REAL,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_lab_values_name_date ON lab_values(name, date)');
+    // Add optional category to progress_photos (front / side / back)
+    try {
+      await db.execute('ALTER TABLE progress_photos ADD COLUMN category TEXT');
+    } catch (_) {}
   }
 
   Future<void> _migrateV19(Database db) async {
@@ -469,6 +512,39 @@ class WorkoutDatabase {
         display_order INTEGER NOT NULL
       )
     ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        dose TEXT,
+        time_hhmm TEXT NOT NULL,
+        notes TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS supplement_logs (
+        supplement_id INTEGER NOT NULL,
+        date TEXT NOT NULL,
+        taken_at TEXT NOT NULL,
+        PRIMARY KEY (supplement_id, date)
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS lab_values (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT,
+        ref_low REAL,
+        ref_high REAL,
+        notes TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_lab_values_name_date ON lab_values(name, date)');
     await db.execute('''
       CREATE TABLE IF NOT EXISTS water_logs (
         date TEXT PRIMARY KEY,
@@ -4422,6 +4498,114 @@ class WorkoutDatabase {
         whereArgs: [fromStr],
         orderBy: 'date ASC');
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  // ─── SUPPLEMENTS ────────────────────────────────────────────────────────────
+
+  Future<List<Supplement>> getSupplements() async {
+    final db = await database;
+    final rows = await db.query('supplements',
+        orderBy: 'time_hhmm ASC, sort_order ASC, id ASC');
+    return rows.map(Supplement.fromMap).toList();
+  }
+
+  Future<int> upsertSupplement(Supplement s) async {
+    final db = await database;
+    if (s.id == null) {
+      return db.insert('supplements', s.toMap());
+    }
+    await db.update('supplements', s.toMap(),
+        where: 'id = ?', whereArgs: [s.id]);
+    return s.id!;
+  }
+
+  Future<void> deleteSupplement(int id) async {
+    final db = await database;
+    await db.delete('supplement_logs',
+        where: 'supplement_id = ?', whereArgs: [id]);
+    await db.delete('supplements', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // Returns the set of supplement IDs that were marked taken on [date].
+  Future<Set<int>> getSupplementsTakenOn(String date) async {
+    final db = await database;
+    final rows = await db.query('supplement_logs',
+        where: 'date = ?',
+        whereArgs: [date],
+        columns: ['supplement_id']);
+    return rows.map((r) => r['supplement_id'] as int).toSet();
+  }
+
+  Future<void> markSupplementTaken(int supplementId, String date) async {
+    final db = await database;
+    await db.insert(
+      'supplement_logs',
+      {
+        'supplement_id': supplementId,
+        'date': date,
+        'taken_at': DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> unmarkSupplementTaken(int supplementId, String date) async {
+    final db = await database;
+    await db.delete('supplement_logs',
+        where: 'supplement_id = ? AND date = ?',
+        whereArgs: [supplementId, date]);
+  }
+
+  // Returns adherence for the last [days] days as a map
+  // {supplementId: takenDayCount}. Use to show weekly adherence.
+  Future<Map<int, int>> getSupplementAdherence({int days = 7}) async {
+    final db = await database;
+    final from = DateTime.now().subtract(Duration(days: days - 1));
+    final fromStr =
+        '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
+    final rows = await db.rawQuery('''
+      SELECT supplement_id, COUNT(*) AS taken_days
+      FROM supplement_logs
+      WHERE date >= ?
+      GROUP BY supplement_id
+    ''', [fromStr]);
+    return {
+      for (final r in rows)
+        (r['supplement_id'] as int): (r['taken_days'] as int),
+    };
+  }
+
+  // ─── LAB VALUES ─────────────────────────────────────────────────────────────
+
+  Future<List<LabValue>> getLabValues({String? name}) async {
+    final db = await database;
+    final rows = name == null
+        ? await db.query('lab_values', orderBy: 'date DESC, id DESC')
+        : await db.query('lab_values',
+            where: 'name = ?', whereArgs: [name], orderBy: 'date DESC');
+    return rows.map(LabValue.fromMap).toList();
+  }
+
+  Future<List<String>> getLabValueNames() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        'SELECT name, MAX(date) AS latest_date FROM lab_values GROUP BY name ORDER BY latest_date DESC');
+    return rows.map((r) => r['name'] as String).toList();
+  }
+
+  Future<int> upsertLabValue(LabValue v) async {
+    final db = await database;
+    if (v.id == null) {
+      return db.insert('lab_values', v.toMap());
+    }
+    await db.update('lab_values', v.toMap(),
+        where: 'id = ?', whereArgs: [v.id]);
+    return v.id!;
+  }
+
+  Future<void> deleteLabValue(int id) async {
+    final db = await database;
+    await db.delete('lab_values', where: 'id = ?', whereArgs: [id]);
   }
 
   Future<void> close() async {

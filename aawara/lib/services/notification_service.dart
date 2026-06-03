@@ -83,8 +83,62 @@ class NotificationService {
     await _plugin.cancel(weekday);
   }
 
+  /// Schedules a daily repeating notification at [time]. [id] should be unique
+  /// per reminder (e.g., 1000 + supplement_id to avoid collision with weekly
+  /// workout reminders which use IDs 1–7).
+  Future<void> scheduleDailyReminder({
+    required int id,
+    required TimeOfDay time,
+    required String title,
+    required String body,
+  }) async {
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Daily reminders from Aawara',
+        importance: Importance.high,
+        priority: Priority.high,
+        icon: '@mipmap/ic_launcher',
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+    final scheduled = _nextDailyOccurrence(time);
+    await _plugin.zonedSchedule(
+      id,
+      title,
+      body,
+      scheduled,
+      details,
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      matchDateTimeComponents: DateTimeComponents.time,
+    );
+  }
+
+  Future<void> cancelById(int id) async {
+    await _plugin.cancel(id);
+  }
+
   Future<void> cancelAll() async {
     await _plugin.cancelAll();
+  }
+
+  tz.TZDateTime _nextDailyOccurrence(TimeOfDay time) {
+    final now = tz.TZDateTime.now(tz.local);
+    var candidate = tz.TZDateTime(
+      tz.local,
+      now.year,
+      now.month,
+      now.day,
+      time.hour,
+      time.minute,
+    );
+    if (candidate.isBefore(now)) {
+      candidate = candidate.add(const Duration(days: 1));
+    }
+    return candidate;
   }
 
   /// Returns the next [tz.TZDateTime] that falls on [weekday] at [time].

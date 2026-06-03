@@ -19,6 +19,9 @@ import '../../utils/safe_navigation.dart';
 import '../widgets/workout_heatmap.dart';
 import '../widgets/step_counter_card.dart';
 import 'body_measurements_screen.dart';
+import 'supplements_screen.dart';
+import 'lab_values_screen.dart';
+import 'progress_photos_screen.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -1510,6 +1513,21 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
           const Color(0xFF1ABC9C), () {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const BodyMeasurementsScreen()));
+      }),
+      _NavItem(Icons.medication_rounded, 'Supplements', 'Daily protocol',
+          const Color(0xFFE91E63), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const SupplementsScreen()));
+      }),
+      _NavItem(Icons.science_rounded, 'Lab Values', 'Bloodwork & trends',
+          const Color(0xFF9B59B6), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const LabValuesScreen()));
+      }),
+      _NavItem(Icons.photo_camera_rounded, 'Photos', 'Compare progress',
+          const Color(0xFFF39C12), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const ProgressPhotosScreen()));
       }),
     ];
 
