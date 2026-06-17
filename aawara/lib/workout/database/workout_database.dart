@@ -4461,12 +4461,15 @@ class WorkoutDatabase {
   Future<List<DailyNutritionSummary>> getNutritionHistory(
       String fromDate, String toDate) async {
     final db = await database;
+    // Macros scale by (quantity × serving_size / 100) — same as the per-entry
+    // NutritionEntry getters. Omitting serving_size here used to inflate the
+    // Progress > Nutrition totals vs. the Nutrition screen.
     final rows = await db.rawQuery('''
       SELECT nl.date,
-             SUM(ne.quantity * f.calories) as calories,
-             SUM(ne.quantity * f.protein_g) as protein_g,
-             SUM(ne.quantity * f.carbs_g) as carbs_g,
-             SUM(ne.quantity * f.fat_g) as fat_g
+             SUM(ne.quantity * f.serving_size / 100.0 * f.calories) as calories,
+             SUM(ne.quantity * f.serving_size / 100.0 * f.protein_g) as protein_g,
+             SUM(ne.quantity * f.serving_size / 100.0 * f.carbs_g) as carbs_g,
+             SUM(ne.quantity * f.serving_size / 100.0 * f.fat_g) as fat_g
       FROM nutrition_logs nl
       INNER JOIN nutrition_entries ne ON ne.log_id = nl.id
       INNER JOIN foods f ON ne.food_id = f.id

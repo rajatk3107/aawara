@@ -988,7 +988,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D1A),
-      resizeToAvoidBottomInset: false,
+      // Resize so the keyboard pushes the content up instead of covering it —
+      // otherwise the exercise note field stays hidden behind the keyboard.
+      resizeToAvoidBottomInset: true,
       body: Column(
         children: [
           _buildHeader(),

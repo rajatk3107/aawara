@@ -6,6 +6,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'privacy_policy_screen.dart';
 import 'services/notification_service.dart';
 import 'services/step_tracking_service.dart';
@@ -24,7 +25,8 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  static const _appVersion = '1.0.0';
+  // Read from pubspec at runtime so it always matches the installed build.
+  String _appVersion = '…';
 
   String? _photoPath;
   int _photoTs = 0;
@@ -50,6 +52,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (mounted) {
+      setState(() => _appVersion = info.version);
+    }
   }
 
   @override
@@ -360,8 +370,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.info_outline_rounded,
               iconColor: const Color(0xFF555577),
               title: 'App Version',
-              trailing: const Text(_appVersion,
-                  style: TextStyle(color: Color(0xFF888899), fontSize: 14)),
+              trailing: Text(_appVersion,
+                  style: const TextStyle(color: Color(0xFF888899), fontSize: 14)),
             ),
             _divider(),
             _tile(
