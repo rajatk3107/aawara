@@ -14,6 +14,11 @@ class NotificationService {
   static const _channelId = 'workout_reminders';
   static const _channelName = 'Workout Reminders';
 
+  // Rest-timer alert (one-shot, fired when a between-sets rest finishes).
+  static const _restChannelId = 'rest_timer';
+  static const _restChannelName = 'Rest Timer';
+  static const _restNotifId = 9100;
+
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -119,6 +124,57 @@ class NotificationService {
 
   Future<void> cancelById(int id) async {
     await _plugin.cancel(id);
+  }
+
+  /// Schedules a one-shot notification to fire [seconds] from now, alerting the
+  /// user that their between-sets rest is over. Scheduled at the OS level so it
+  /// fires even if the app is backgrounded or the screen is off. Re-scheduling
+  /// replaces any previously pending rest alert.
+  Future<void> scheduleRestEnd({
+    required int seconds,
+    String? exerciseName,
+  }) async {
+    if (seconds <= 0) return;
+    await initialize();
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        _restChannelId,
+        _restChannelName,
+        channelDescription: 'Alerts you when your rest timer finishes',
+        importance: Importance.max,
+        priority: Priority.high,
+        category: AndroidNotificationCategory.alarm,
+        icon: '@mipmap/ic_launcher',
+        enableVibration: true,
+      ),
+      iOS: DarwinNotificationDetails(),
+    );
+    final when = tz.TZDateTime.now(tz.local).add(Duration(seconds: seconds));
+    const title = 'Rest complete 💪';
+    final body = (exerciseName != null && exerciseName.isNotEmpty)
+        ? 'Time for your next set — $exerciseName'
+        : 'Time for your next set!';
+    // Prefer an exact alarm so the alert lands on time; fall back to inexact if
+    // the OS hasn't granted exact-alarm access (Android 13+) so we never crash.
+    try {
+      await _plugin.zonedSchedule(
+        _restNotifId, title, body, when, details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    } catch (_) {
+      await _plugin.zonedSchedule(
+        _restNotifId, title, body, when, details,
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+      );
+    }
+  }
+
+  Future<void> cancelRestEnd() async {
+    await _plugin.cancel(_restNotifId);
   }
 
   Future<void> cancelAll() async {

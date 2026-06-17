@@ -9,6 +9,7 @@ import '../models/workout_log.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
 import '../../utils/safe_navigation.dart';
+import '../../services/notification_service.dart';
 import 'workout_complete_screen.dart';
 import 'quick_start_screen.dart';
 
@@ -61,6 +62,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   int _restDefault = 90; // loaded from prefs, user-configurable
   bool _restExpanded = false;
   bool _restDone = false;
+  bool _restNotifAsked = false; // request notification permission once per screen
   final Map<String, int> _exerciseRestOverrides = {};
 
   @override
@@ -143,6 +145,8 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _restTimer?.cancel();
+    // Cancel a still-pending rest alert if the user leaves mid-rest.
+    if (_restRemaining > 0) NotificationService.instance.cancelRestEnd();
     _saveTimerState();
     for (final c in _noteControllers.values) {
       c.dispose();
@@ -273,7 +277,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   // ─── Rest Timer ───────────────────────────────────────────────────────────────
 
-  void _startRest(int seconds, {String? exerciseId}) {
+  void _startRest(int seconds, {String? exerciseId, String? exerciseName}) {
     _restTimer?.cancel();
     setState(() {
       _restRemaining = seconds;
@@ -281,6 +285,14 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       _restDone = false;
       _restExpanded = false;
     });
+    // OS-level alert so the user is notified when rest ends even if the app is
+    // backgrounded or the screen is off (the in-app Timer can't fire then).
+    if (!_restNotifAsked) {
+      _restNotifAsked = true;
+      NotificationService.instance.requestPermission();
+    }
+    NotificationService.instance
+        .scheduleRestEnd(seconds: seconds, exerciseName: exerciseName);
     _restTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       final next = _restRemaining - 1;
@@ -294,14 +306,18 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         Future.delayed(const Duration(milliseconds: 200), HapticFeedback.heavyImpact);
         Future.delayed(const Duration(milliseconds: 400), HapticFeedback.heavyImpact);
         Future.delayed(const Duration(seconds: 1), () {
-          if (mounted) _cancelRest();
+          // Natural end: keep the fired notification in the tray.
+          if (mounted) _cancelRest(clearNotification: false);
         });
       }
     });
   }
 
-  void _cancelRest() {
+  // [clearNotification] is false only on natural completion (the alert has
+  // already fired); true when the user skips/cancels rest early.
+  void _cancelRest({bool clearNotification = true}) {
     _restTimer?.cancel();
+    if (clearNotification) NotificationService.instance.cancelRestEnd();
     setState(() {
       _restRemaining = 0;
       _restDone = false;
@@ -507,7 +523,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       if (idx >= 0) exLog.sets[idx] = updated;
     });
     if (next && !_log.completed) {
-      _startRest(_getRestSeconds(exLog.exerciseId), exerciseId: exLog.exerciseId);
+      _startRest(_getRestSeconds(exLog.exerciseId),
+          exerciseId: exLog.exerciseId,
+          exerciseName: _exercises[exLog.id]?.name);
       _checkPR(exLog, updated);
       _checkOverloadNudge(exLog);
     }
