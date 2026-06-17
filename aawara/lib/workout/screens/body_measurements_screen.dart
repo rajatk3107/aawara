@@ -34,6 +34,27 @@ MeasurementType? measurementTypeByKey(String key) =>
         (t) => t?.key == key,
         orElse: () => null);
 
+// Date ranges for the body-measurement history chart.
+enum _ChartRange { oneMonth, threeMonths, sixMonths, oneYear, all }
+
+extension _ChartRangeX on _ChartRange {
+  String get label => switch (this) {
+        _ChartRange.oneMonth => '1M',
+        _ChartRange.threeMonths => '3M',
+        _ChartRange.sixMonths => '6M',
+        _ChartRange.oneYear => '1Y',
+        _ChartRange.all => 'All',
+      };
+
+  int? get days => switch (this) {
+        _ChartRange.oneMonth => 30,
+        _ChartRange.threeMonths => 90,
+        _ChartRange.sixMonths => 180,
+        _ChartRange.oneYear => 365,
+        _ChartRange.all => null,
+      };
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 class BodyMeasurementsScreen extends StatefulWidget {
@@ -54,6 +75,7 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
   String? _selectedKey;
   List<Map<String, dynamic>> _chartData = [];
   bool _chartLoading = false;
+  _ChartRange _chartRange = _ChartRange.all;
 
   // History entries (last 60 days)
   List<String> _dates = [];
@@ -89,7 +111,12 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
       _chartLoading = true;
       _chartData = [];
     });
-    final data = await _db.getMeasurementHistory(key);
+    await _loadChart(key);
+  }
+
+  Future<void> _loadChart(String key) async {
+    final data =
+        await _db.getMeasurementHistory(key, fromDate: _chartFromDate());
     if (!mounted) return;
     setState(() {
       _chartData = data;
@@ -97,14 +124,38 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
     });
   }
 
+  void _changeRange(_ChartRange range) {
+    if (range == _chartRange) return;
+    setState(() {
+      _chartRange = range;
+      _chartLoading = true;
+    });
+    if (_selectedKey != null) _loadChart(_selectedKey!);
+  }
+
+  String? _chartFromDate() {
+    final days = _chartRange.days;
+    if (days == null) return null;
+    final from = DateTime.now().subtract(Duration(days: days));
+    return '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _openLogSheet([String? date]) async {
+    // Editing an existing date: pre-fill that day's actual values so the user
+    // can see and edit them. New entry: start blank so only what the user types
+    // gets logged (don't pre-fill latest values for every body part).
+    final isEditing = date != null;
+    final existing =
+        isEditing ? await _db.getMeasurementsForDate(date) : <String, double>{};
+    if (!mounted) return;
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => _LogMeasurementsSheet(
         initialDate: date ?? _todayStr(),
-        existing: date != null ? {} : _latest,
+        existing: existing,
+        isEditing: isEditing,
       ),
     );
     if (result == true) _load();
@@ -138,10 +189,7 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
     if (confirm == true) {
       await _db.deleteMeasurement(date, type);
       _load();
-      if (_selectedKey == type) {
-        final data = await _db.getMeasurementHistory(type);
-        if (mounted) setState(() => _chartData = data);
-      }
+      if (_selectedKey == type) _loadChart(type);
     }
   }
 
@@ -336,6 +384,44 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
     );
   }
 
+  Widget _buildRangeSelector(MeasurementType mt) {
+    return Row(
+      children: _ChartRange.values.map((r) {
+        final selected = r == _chartRange;
+        return Expanded(
+          child: GestureDetector(
+            onTap: () => _changeRange(r),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              margin: const EdgeInsets.only(right: 6),
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected
+                    ? mt.color.withValues(alpha: 0.15)
+                    : const Color(0xFF1A1A2E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: selected
+                      ? mt.color.withValues(alpha: 0.6)
+                      : const Color(0xFF2A2A3E),
+                ),
+              ),
+              child: Text(
+                r.label,
+                style: TextStyle(
+                  color: selected ? mt.color : const Color(0xFF888899),
+                  fontSize: 12,
+                  fontWeight: selected ? FontWeight.bold : FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildChartSection() {
     final mt = measurementTypeByKey(_selectedKey!)!;
     return Column(
@@ -358,6 +444,8 @@ class _BodyMeasurementsScreenState extends State<BodyMeasurementsScreen> {
             ),
           ],
         ),
+        const SizedBox(height: 10),
+        _buildRangeSelector(mt),
         const SizedBox(height: 12),
         if (_chartLoading)
           const SizedBox(
@@ -693,10 +781,12 @@ class _HistoryDateCardState extends State<_HistoryDateCard> {
 class _LogMeasurementsSheet extends StatefulWidget {
   final String initialDate;
   final Map<String, double> existing;
+  final bool isEditing;
 
   const _LogMeasurementsSheet({
     required this.initialDate,
     required this.existing,
+    this.isEditing = false,
   });
 
   @override
@@ -816,9 +906,9 @@ class _LogMeasurementsSheetState extends State<_LogMeasurementsSheet> {
               padding: const EdgeInsets.fromLTRB(20, 6, 16, 4),
               child: Row(
                 children: [
-                  const Text(
-                    'Log Measurements',
-                    style: TextStyle(
+                  Text(
+                    widget.isEditing ? 'Edit Measurements' : 'Log Measurements',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 18,
                       fontWeight: FontWeight.bold,

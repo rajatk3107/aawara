@@ -106,8 +106,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
       final prefs = await SharedPreferences.getInstance();
       final userGoal = prefs.getString('user_goal');
 
-      final now = DateTime.now();
-      final weekMonday = now.subtract(Duration(days: now.weekday - 1));
+      // Completed-date dots reflect the week containing the selected date, so
+      // paging to another week shows that week's completions.
+      final weekMonday =
+          _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
       final weekSunday = weekMonday.add(const Duration(days: 6));
       final weekFrom = _fmt(weekMonday);
       final weekTo = _fmt(weekSunday);
@@ -156,6 +158,7 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
         });
 
         // Monthly summary — show once on first open of a new month
+        final now = DateTime.now();
         final currentMonth =
             '${now.year}-${now.month.toString().padLeft(2, '0')}';
         final lastShown = prefs.getString('last_summary_shown_month') ?? '';
@@ -669,9 +672,63 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
 
   // ─── Week Plan Strip ─────────────────────────────────────────────────────────
 
+  Widget _weekNavIcon(IconData icon, VoidCallback onTap, {Color? color}) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Icon(icon, size: 20, color: color ?? const Color(0xFF888899)),
+      ),
+    );
+  }
+
+  void _changeWeek(int delta) {
+    setState(() => _selectedDate =
+        _selectedDate.add(Duration(days: 7 * delta)));
+    _loadForDate();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFFFFD700),
+            onPrimary: Colors.black,
+            surface: Color(0xFF1A1A2E),
+            onSurface: Colors.white,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null && mounted) {
+      setState(() => _selectedDate = picked);
+      _loadForDate();
+    }
+  }
+
   Widget _buildWeekStrip() {
     final now = DateTime.now();
-    final weekMonday = now.subtract(Duration(days: now.weekday - 1));
+    final today = DateTime(now.year, now.month, now.day);
+    // Show the week that contains the currently selected date, so the user can
+    // page back/forward through any week — not just the current one.
+    final weekMonday =
+        _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final currentWeekMonday = today.subtract(Duration(days: today.weekday - 1));
+    final isCurrentWeek = weekMonday.year == currentWeekMonday.year &&
+        weekMonday.month == currentWeekMonday.month &&
+        weekMonday.day == currentWeekMonday.day;
+    final weekSunday = weekMonday.add(const Duration(days: 6));
+    final weekLabel = isCurrentWeek
+        ? 'THIS WEEK · $_weeklyCount / 7'
+        : '${DateFormat('MMM d').format(weekMonday)} – ${DateFormat('MMM d').format(weekSunday)}'
+            .toUpperCase();
     final dayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
     return Container(
@@ -684,23 +741,24 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
       child: Column(
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                'THIS WEEK',
-                style: const TextStyle(
-                    color: Color(0xFF555577),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8),
+              _weekNavIcon(Icons.chevron_left_rounded, () => _changeWeek(-1)),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    weekLabel,
+                    style: const TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8),
+                  ),
+                ),
               ),
-              Text(
-                '$_weeklyCount / 7',
-                style: const TextStyle(
-                    color: Color(0xFFFFD700),
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold),
-              ),
+              _weekNavIcon(Icons.chevron_right_rounded, () => _changeWeek(1)),
+              const SizedBox(width: 2),
+              _weekNavIcon(Icons.calendar_month_rounded, _pickDate,
+                  color: const Color(0xFFFFD700)),
             ],
           ),
           const SizedBox(height: 10),
@@ -709,7 +767,9 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
               final dayDate = weekMonday.add(Duration(days: i));
               final dateStr = _fmt(dayDate);
               final isDone = _weekCompletedDates.contains(dateStr);
-              final isToday = (i + 1) == now.weekday;
+              final isToday = dayDate.year == today.year &&
+                  dayDate.month == today.month &&
+                  dayDate.day == today.day;
               final isSelected = _selectedDate.year == dayDate.year &&
                   _selectedDate.month == dayDate.month &&
                   _selectedDate.day == dayDate.day;

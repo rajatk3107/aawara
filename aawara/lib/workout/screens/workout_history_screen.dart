@@ -20,6 +20,15 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
   List<WorkoutLog> _logs = [];
   bool _loading = true;
 
+  // Filters (all client-side over the loaded logs)
+  String? _typeFilter; // workout name e.g. "Pull A"
+  int? _weekdayFilter; // DateTime.weekday 1=Mon … 7=Sun
+  DateTimeRange? _dateFilter;
+
+  static const _weekdayNames = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -37,10 +46,39 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
     if (mounted) setState(() { _logs = logs; _loading = false; });
   }
 
+  List<String> get _workoutTypes =>
+      _logs.map((l) => l.workoutName).toSet().toList()..sort();
+
+  bool get _hasActiveFilter =>
+      _typeFilter != null || _weekdayFilter != null || _dateFilter != null;
+
+  List<WorkoutLog> get _filtered {
+    return _logs.where((log) {
+      if (_typeFilter != null && log.workoutName != _typeFilter) return false;
+      DateTime? d;
+      try {
+        d = DateTime.parse(log.date);
+      } catch (_) {
+        d = null;
+      }
+      if (_weekdayFilter != null && (d == null || d.weekday != _weekdayFilter)) {
+        return false;
+      }
+      if (_dateFilter != null) {
+        if (d == null) return false;
+        final day = DateTime(d.year, d.month, d.day);
+        if (day.isBefore(_dateFilter!.start) || day.isAfter(_dateFilter!.end)) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
+
   // Groups logs by month label
   Map<String, List<WorkoutLog>> get _grouped {
     final map = <String, List<WorkoutLog>>{};
-    for (final log in _logs) {
+    for (final log in _filtered) {
       try {
         final d = DateTime.parse(log.date);
         final key = DateFormat('MMMM yyyy').format(d);
@@ -50,6 +88,197 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
       }
     }
     return map;
+  }
+
+  void _clearFilters() => setState(() {
+        _typeFilter = null;
+        _weekdayFilter = null;
+        _dateFilter = null;
+      });
+
+  Future<void> _pickType() async {
+    final types = _workoutTypes;
+    final res = await _showOptionSheet(
+      'Workout Type',
+      [const _Opt('All', null), ...types.map((t) => _Opt(t, t))],
+      _typeFilter,
+    );
+    if (res != null) setState(() => _typeFilter = res.value as String?);
+  }
+
+  Future<void> _pickWeekday() async {
+    final res = await _showOptionSheet(
+      'Day of Week',
+      [
+        const _Opt('All', null),
+        for (int i = 1; i <= 7; i++) _Opt(_weekdayNames[i - 1], i),
+      ],
+      _weekdayFilter,
+    );
+    if (res != null) setState(() => _weekdayFilter = res.value as int?);
+  }
+
+  Future<void> _pickDateRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(now.year + 1, 12, 31),
+      initialDateRange: _dateFilter,
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Color(0xFFFFD700),
+            onPrimary: Colors.black,
+            surface: Color(0xFF1A1A2E),
+            onSurface: Colors.white,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _dateFilter = picked);
+  }
+
+  // Returns the chosen option, or null if dismissed.
+  Future<_Opt?> _showOptionSheet(
+      String title, List<_Opt> options, Object? current) {
+    return showModalBottomSheet<_Opt>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(title,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                children: options.map((o) {
+                  final selected = o.value == current;
+                  return ListTile(
+                    title: Text(o.label,
+                        style: TextStyle(
+                            color: selected
+                                ? const Color(0xFFFFD700)
+                                : Colors.white,
+                            fontWeight:
+                                selected ? FontWeight.bold : FontWeight.normal)),
+                    trailing: selected
+                        ? const Icon(Icons.check_rounded,
+                            color: Color(0xFFFFD700), size: 20)
+                        : null,
+                    onTap: () => Navigator.pop(ctx, o),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFilterBar() {
+    String dateLabel() {
+      final r = _dateFilter!;
+      final f = DateFormat('MMM d');
+      return '${f.format(r.start)} – ${f.format(r.end)}';
+    }
+
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: [
+          _filterChip(
+            label: _typeFilter ?? 'Type',
+            active: _typeFilter != null,
+            icon: Icons.fitness_center_rounded,
+            onTap: _pickType,
+          ),
+          const SizedBox(width: 8),
+          _filterChip(
+            label: _weekdayFilter != null
+                ? _weekdayNames[_weekdayFilter! - 1]
+                : 'Day',
+            active: _weekdayFilter != null,
+            icon: Icons.today_rounded,
+            onTap: _pickWeekday,
+          ),
+          const SizedBox(width: 8),
+          _filterChip(
+            label: _dateFilter != null ? dateLabel() : 'Dates',
+            active: _dateFilter != null,
+            icon: Icons.date_range_rounded,
+            onTap: _pickDateRange,
+          ),
+          if (_hasActiveFilter) ...[
+            const SizedBox(width: 8),
+            _filterChip(
+              label: 'Clear',
+              active: false,
+              icon: Icons.close_rounded,
+              onTap: _clearFilters,
+              danger: true,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _filterChip({
+    required String label,
+    required bool active,
+    required IconData icon,
+    required VoidCallback onTap,
+    bool danger = false,
+  }) {
+    final accent =
+        danger ? const Color(0xFFE74C3C) : const Color(0xFFFFD700);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: active
+              ? accent.withValues(alpha: 0.15)
+              : const Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color:
+                active ? accent.withValues(alpha: 0.6) : const Color(0xFF2A2A3E),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon,
+                size: 15,
+                color: active || danger ? accent : const Color(0xFF888899)),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                    color: active || danger ? accent : const Color(0xFFCCCCDD),
+                    fontSize: 13,
+                    fontWeight: active ? FontWeight.bold : FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -82,14 +311,22 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
               child: CircularProgressIndicator(color: Color(0xFFFFD700)))
           : _logs.isEmpty
               ? _buildEmpty()
-              : RefreshIndicator(
-                  color: const Color(0xFFFFD700),
-                  backgroundColor: const Color(0xFF1A1A2E),
-                  onRefresh: _load,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: months.length,
-                    itemBuilder: (_, mi) {
+              : Column(
+                  children: [
+                    const SizedBox(height: 8),
+                    _buildFilterBar(),
+                    const SizedBox(height: 4),
+                    Expanded(
+                      child: months.isEmpty
+                          ? _buildNoMatch()
+                          : RefreshIndicator(
+                              color: const Color(0xFFFFD700),
+                              backgroundColor: const Color(0xFF1A1A2E),
+                              onRefresh: _load,
+                              child: ListView.builder(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: months.length,
+                                itemBuilder: (_, mi) {
                       final month = months[mi];
                       final monthLogs = grouped[month]!;
                       return Column(
@@ -125,6 +362,9 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
                       );
                     },
                   ),
+                            ),
+                    ),
+                  ],
                 ),
     );
   }
@@ -136,6 +376,21 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
       subtitle: 'Complete your first workout to see it here',
     );
   }
+
+  Widget _buildNoMatch() {
+    return const EmptyStateWidget(
+      icon: Icons.filter_alt_off_rounded,
+      title: 'No workouts match',
+      subtitle: 'Try adjusting or clearing your filters',
+    );
+  }
+}
+
+// Option used by the history filter bottom sheets.
+class _Opt {
+  final String label;
+  final Object? value;
+  const _Opt(this.label, this.value);
 }
 
 class _LogCard extends StatelessWidget {
