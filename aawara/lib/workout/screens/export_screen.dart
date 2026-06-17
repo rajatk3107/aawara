@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -17,6 +18,8 @@ import '../../notes/notes_database.dart';
 enum _Range { today, week, month, year, all, custom }
 
 enum _Format { json, csv }
+
+enum _Delivery { share, save }
 
 enum _DataCategory {
   workouts,
@@ -207,6 +210,88 @@ class _ExportScreenState extends State<ExportScreen> {
 
   // ─── Export ───────────────────────────────────────────────────────────────
 
+  /// Asks the user whether to save the file to their device or share it,
+  /// then performs the chosen action. Returns once done/cancelled.
+  Future<void> _deliverFile(
+    String content,
+    String fileName,
+    String mimeType, {
+    required String subject,
+  }) async {
+    final choice = await _chooseDelivery();
+    if (choice == null || !mounted) return;
+
+    if (choice == _Delivery.save) {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Save $fileName',
+        fileName: fileName,
+        bytes: Uint8List.fromList(utf8.encode(content)),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(savedPath != null ? 'Saved to device' : 'Save cancelled'),
+        backgroundColor:
+            savedPath != null ? const Color(0xFF2ECC71) : const Color(0xFF1A1A2E),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } else {
+      final tmpDir = await getTemporaryDirectory();
+      final file = File('${tmpDir.path}/$fileName');
+      await file.writeAsString(content, encoding: utf8);
+      if (!mounted) return;
+      await Share.shareXFiles(
+        [XFile(file.path, mimeType: mimeType)],
+        subject: subject,
+      );
+    }
+  }
+
+  Future<_Delivery?> _chooseDelivery() {
+    return showModalBottomSheet<_Delivery>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) {
+        Widget option(
+                IconData icon, String title, String subtitle, _Delivery v) =>
+            ListTile(
+              leading: Icon(icon, color: const Color(0xFFFFD700)),
+              title: Text(title,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w600)),
+              subtitle: Text(subtitle,
+                  style:
+                      const TextStyle(color: Color(0xFF888899), fontSize: 12)),
+              onTap: () => Navigator.pop(ctx, v),
+            );
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Export',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                ),
+              ),
+              option(Icons.save_alt_rounded, 'Save to device',
+                  'Choose a folder on your phone', _Delivery.save),
+              option(Icons.ios_share_rounded, 'Share',
+                  'Send via another app', _Delivery.share),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _export() async {
     final availableCats = _format == _Format.csv
         ? [_DataCategory.workouts]
@@ -249,14 +334,11 @@ class _ExportScreenState extends State<ExportScreen> {
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'aawara_export_$stamp.$ext';
 
-      final tmpDir = await getTemporaryDirectory();
-      final file = File('${tmpDir.path}/$fileName');
-      await file.writeAsString(content, encoding: utf8);
-
       if (!mounted) return;
-
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: _format == _Format.csv ? 'text/csv' : 'application/json')],
+      await _deliverFile(
+        content,
+        fileName,
+        _format == _Format.csv ? 'text/csv' : 'application/json',
         subject: 'Aawara Workout Export',
       );
     } catch (e) {
@@ -309,12 +391,11 @@ class _ExportScreenState extends State<ExportScreen> {
 
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'aawara_ai_export_$stamp.md';
-      final tmpDir = await getTemporaryDirectory();
-      final file = File('${tmpDir.path}/$fileName');
-      await file.writeAsString(content, encoding: utf8);
       if (!mounted) return;
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'text/markdown')],
+      await _deliverFile(
+        content,
+        fileName,
+        'text/markdown',
         subject: 'Aawara — AI Analysis Data',
       );
     } catch (e) {
@@ -376,12 +457,11 @@ class _ExportScreenState extends State<ExportScreen> {
 
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
       final fileName = 'aawara_fullbackup_$stamp.json';
-      final tmpDir = await getTemporaryDirectory();
-      final file = File('${tmpDir.path}/$fileName');
-      await file.writeAsString(content, encoding: utf8);
       if (!mounted) return;
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'application/json')],
+      await _deliverFile(
+        content,
+        fileName,
+        'application/json',
         subject: 'Aawara Full Backup',
       );
     } catch (e) {
