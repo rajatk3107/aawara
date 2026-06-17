@@ -10,6 +10,7 @@ import '../widgets/water_tracker_card.dart';
 import 'meal_presets_screen.dart';
 import 'nutrition_goals_screen.dart';
 import 'tdee_calculator_screen.dart';
+import '../../app_refresh.dart';
 
 class NutritionScreen extends StatefulWidget {
   const NutritionScreen({super.key});
@@ -18,8 +19,14 @@ class NutritionScreen extends StatefulWidget {
   State<NutritionScreen> createState() => _NutritionScreenState();
 }
 
-class _NutritionScreenState extends State<NutritionScreen> {
+class _NutritionScreenState extends State<NutritionScreen>
+    implements RefreshableState {
   final _db = WorkoutDatabase.instance;
+
+  @override
+  void refreshData() {
+    if (mounted) _load();
+  }
 
   DateTime _selectedDate = DateTime.now();
   NutritionTotals _totals = NutritionTotals.empty;

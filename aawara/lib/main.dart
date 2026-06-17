@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_refresh.dart';
 import 'services/notification_service.dart';
 import 'services/step_tracking_service.dart';
 import 'splash_screen.dart';
@@ -18,6 +19,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Aawara',
       debugShowCheckedModeBanner: false,
+      navigatorObservers: [routeObserver],
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: ColorScheme.fromSeed(

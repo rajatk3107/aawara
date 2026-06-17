@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'app_refresh.dart';
 import 'workout/screens/workout_home_screen.dart';
 import 'workout/screens/progress_screen.dart';
 import 'workout/screens/workout_history_screen.dart';
@@ -13,16 +14,61 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen>
+    with WidgetsBindingObserver, RouteAware {
   int _tab = 0;
 
-  static const _screens = [
-    WorkoutHomeScreen(),
-    ProgressScreen(),
-    NutritionScreen(),
-    WorkoutHistoryScreen(),
-    SettingsScreen(),
+  // Tabs live in an IndexedStack (kept alive to preserve scroll/state), so they
+  // only load in initState. These keys let us re-fetch the visible tab's data
+  // whenever it becomes current again.
+  final List<GlobalKey> _keys = List.generate(5, (_) => GlobalKey());
+
+  late final List<Widget> _screens = [
+    WorkoutHomeScreen(key: _keys[0]),
+    ProgressScreen(key: _keys[1]),
+    NutritionScreen(key: _keys[2]),
+    WorkoutHistoryScreen(key: _keys[3]),
+    SettingsScreen(key: _keys[4]),
   ];
+
+  void _refreshTab(int i) {
+    final state = _keys[i].currentState;
+    if (state is RefreshableState) (state as RefreshableState).refreshData();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) routeObserver.subscribe(this, route);
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Returned to this screen after a pushed route/dialog/sheet was popped.
+  @override
+  void didPopNext() => _refreshTab(_tab);
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshTab(_tab);
+  }
+
+  void _onTabSelected(int i) {
+    setState(() => _tab = i);
+    _refreshTab(i);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,7 +89,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
           child: NavigationBar(
             selectedIndex: _tab,
-            onDestinationSelected: (i) => setState(() => _tab = i),
+            onDestinationSelected: _onTabSelected,
             backgroundColor: const Color(0xFF0D0D1A),
             indicatorColor: const Color(0xFFFFD700).withValues(alpha: 0.15),
             labelBehavior:

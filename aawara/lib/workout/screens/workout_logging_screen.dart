@@ -174,37 +174,42 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   Future<void> _loadDetails() async {
     setState(() => _loading = true);
-    final prefs = await SharedPreferences.getInstance();
-    for (final exLog in _log.exercises) {
-      final ex = await _db.getExerciseById(exLog.exerciseId);
-      if (ex != null) _exercises[exLog.id] = ex;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      for (final exLog in _log.exercises) {
+        final ex = await _db.getExerciseById(exLog.exerciseId);
+        if (ex != null) _exercises[exLog.id] = ex;
 
-      _noteControllers.putIfAbsent(
-        exLog.id,
-        () => TextEditingController(text: exLog.notes ?? ''),
-      );
+        _noteControllers.putIfAbsent(
+          exLog.id,
+          () => TextEditingController(text: exLog.notes ?? ''),
+        );
 
-      // Build hint from last session
-      final prev = await _db.getLastSetsForExercise(exLog.exerciseId);
-      if (prev.isNotEmpty) {
-        final s = prev.first;
-        if (ex != null && !ex.isCardio && s.weight != null && s.reps != null) {
-          _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
+        // Build hint from last session
+        final prev = await _db.getLastSetsForExercise(exLog.exerciseId);
+        if (prev.isNotEmpty) {
+          final s = prev.first;
+          if (ex != null && !ex.isCardio && s.weight != null && s.reps != null) {
+            _hints[exLog.id] = '${_fmtW(s.weight!)} × ${s.reps}';
+          }
         }
-      }
-      // Build progression suggestion from last completed session (excluding today's)
-      if (ex != null && !ex.isCardio) {
-        final last = await _db.getLastCompletedSetsForExercise(
-            exLog.exerciseId, _log.date);
-        if (last != null) {
-          _suggestions[exLog.id] = _computeSuggestion(last.sets);
+        // Build progression suggestion from last completed session (excluding today's)
+        if (ex != null && !ex.isCardio) {
+          final last = await _db.getLastCompletedSetsForExercise(
+              exLog.exerciseId, _log.date);
+          if (last != null) {
+            _suggestions[exLog.id] = _computeSuggestion(last.sets);
+          }
         }
-      }
 
-      final override = prefs.getInt('rest_timer_${exLog.exerciseId}');
-      if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
+        final override = prefs.getInt('rest_timer_${exLog.exerciseId}');
+        if (override != null) _exerciseRestOverrides[exLog.exerciseId] = override;
+      }
+    } finally {
+      // Always clear the loading flag so a failed query can't leave the screen
+      // stuck on a blank/loading state until the app is restarted.
+      if (mounted) setState(() => _loading = false);
     }
-    if (mounted) setState(() => _loading = false);
 
     // Load plateau data in background — failure is silent
     _db.getPlateauedExercises().then((alerts) {
@@ -767,6 +772,43 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       ));
       return;
     }
+
+    // Two-step confirmation — finishing stops the timer, so guard against taps.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Finish Workout?',
+            style: TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+        content: Text(
+          'This ends your session and stops the timer at $_durationStr. '
+          'You can re-open it later to keep going.',
+          style: const TextStyle(color: Color(0xFFAAAABB), fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep Going',
+                style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFFD700),
+              foregroundColor: Colors.black,
+              shape:
+                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child:
+                const Text('Finish', style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
     _durationTimer?.cancel();
     _clearTimerState();
     final updated = _log.copyWith(completed: true, durationSeconds: _elapsedSeconds);
@@ -798,10 +840,19 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   Future<void> _undoComplete() async {
     final updated = _log.copyWith(completed: false);
     await _db.updateWorkoutLog(updated);
+    final resumeFrom = updated.durationSeconds ?? 0;
     setState(() {
       _log = updated;
-      _elapsedSeconds = updated.durationSeconds ?? 0;
+      _elapsedSeconds = resumeFrom;
+      _paused = false;
+      // Re-anchor the wall-clock start so the timer continues from where it was
+      // left off instead of restarting at 0.
+      _workoutStartTime =
+          DateTime.now().subtract(Duration(seconds: resumeFrom));
     });
+    // Re-persist the start time so re-opening the screen resumes correctly.
+    _saveTimerState();
+    _startDurationTimer();
   }
 
   // ─── Manual value input ───────────────────────────────────────────────────────

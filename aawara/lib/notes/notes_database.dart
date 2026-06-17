@@ -6,12 +6,22 @@ import 'note_model.dart';
 class NotesDatabase {
   static final NotesDatabase instance = NotesDatabase._init();
   static Database? _db;
+  // See WorkoutDatabase: cache the in-flight open so concurrent first-callers
+  // share one init instead of racing to open the DB multiple times.
+  static Future<Database>? _opening;
 
   NotesDatabase._init();
 
   Future<Database> get database async {
-    _db ??= await _initDB('richie_rich_notes.db');
-    return _db!;
+    if (_db != null) return _db!;
+    _opening ??= _initDB('richie_rich_notes.db');
+    try {
+      _db = await _opening!;
+      return _db!;
+    } catch (_) {
+      _opening = null;
+      rethrow;
+    }
   }
 
   Future<Database> _initDB(String fileName) async {

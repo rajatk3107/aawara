@@ -13,6 +13,7 @@ import 'progress_photos_screen.dart';
 import 'step_goal_screen.dart';
 import '../widgets/plateau_banner.dart';
 import '../../nutrition/models/nutrition_models.dart';
+import '../../app_refresh.dart';
 
 enum _Interval { all, twoWeeks, oneMonth, threeMonths, sixMonths, custom }
 
@@ -24,8 +25,14 @@ class ProgressScreen extends StatefulWidget {
 }
 
 class _ProgressScreenState extends State<ProgressScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin
+    implements RefreshableState {
   final _db = WorkoutDatabase.instance;
+
+  @override
+  void refreshData() {
+    if (mounted) _load(silent: true);
+  }
   late TabController _tabCtrl;
 
   // Strength tab
@@ -86,8 +93,8 @@ class _ProgressScreenState extends State<ProgressScreen>
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     final exercises = await _db.getAllExercises();
     final streak = await _db.getWorkoutStreak();
     final weekly = await _db.getWeeklyWorkoutCount();
@@ -99,8 +106,12 @@ class _ProgressScreenState extends State<ProgressScreen>
         _loading = false;
       });
     }
-    if (exercises.isNotEmpty) _selectExercise(exercises.first);
-    _loadWeightData();
+    // Only auto-select on first load; don't override the user's chosen exercise
+    // when silently refreshing.
+    if (exercises.isNotEmpty && _selected == null) {
+      _selectExercise(exercises.first);
+    }
+    _loadWeightData(silent: silent);
     _loadStepHistory();
   }
 
@@ -117,8 +128,8 @@ class _ProgressScreenState extends State<ProgressScreen>
     }
   }
 
-  Future<void> _loadWeightData() async {
-    setState(() => _weightLoading = true);
+  Future<void> _loadWeightData({bool silent = false}) async {
+    if (!silent) setState(() => _weightLoading = true);
     final results = await Future.wait([
       _db.getBodyWeightLogs(
           fromDate: _weightFromDate(), toDate: _weightToDate()),

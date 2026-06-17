@@ -16,6 +16,7 @@ import '../../settings_screen.dart';
 import '../../nutrition/models/nutrition_models.dart';
 import '../../nutrition/screens/nutrition_screen.dart';
 import '../../utils/safe_navigation.dart';
+import '../../app_refresh.dart';
 import '../widgets/workout_heatmap.dart';
 import '../widgets/step_counter_card.dart';
 import 'body_measurements_screen.dart';
@@ -30,7 +31,13 @@ class WorkoutHomeScreen extends StatefulWidget {
   State<WorkoutHomeScreen> createState() => _WorkoutHomeScreenState();
 }
 
-class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
+class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
+    implements RefreshableState {
+  @override
+  void refreshData() {
+    if (mounted) _load(silent: true);
+  }
+
   final _db = WorkoutDatabase.instance;
 
   DateTime _selectedDate = DateTime.now();
@@ -91,8 +98,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen> {
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    // On a silent refresh (tab switch / resume / returning to screen) keep the
+    // current data on screen instead of flashing a spinner.
+    if (!silent) setState(() => _loading = true);
     try {
       final prefs = await SharedPreferences.getInstance();
       final userGoal = prefs.getString('user_goal');

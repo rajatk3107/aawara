@@ -5,6 +5,7 @@ import '../models/workout_log.dart';
 import '../widgets/empty_state_widget.dart';
 import 'export_screen.dart';
 import 'workout_logging_screen.dart';
+import '../../app_refresh.dart';
 
 class WorkoutHistoryScreen extends StatefulWidget {
   const WorkoutHistoryScreen({super.key});
@@ -13,7 +14,8 @@ class WorkoutHistoryScreen extends StatefulWidget {
   State<WorkoutHistoryScreen> createState() => _WorkoutHistoryScreenState();
 }
 
-class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
+class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen>
+    implements RefreshableState {
   final _db = WorkoutDatabase.instance;
   List<WorkoutLog> _logs = [];
   bool _loading = true;
@@ -24,8 +26,13 @@ class _WorkoutHistoryScreenState extends State<WorkoutHistoryScreen> {
     _load();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  @override
+  void refreshData() {
+    if (mounted) _load(silent: true);
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() => _loading = true);
     final logs = await _db.getAllWorkoutLogs();
     if (mounted) setState(() { _logs = logs; _loading = false; });
   }

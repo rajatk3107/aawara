@@ -15,13 +15,23 @@ import '../../nutrition/models/nutrition_models.dart';
 class WorkoutDatabase {
   static final WorkoutDatabase instance = WorkoutDatabase._init();
   static Database? _database;
+  // Caches the in-flight open so concurrent callers (e.g. Future.wait of many
+  // queries on cold start) all await the same init instead of each kicking off
+  // their own open + migrations, which used to race and throw.
+  static Future<Database>? _opening;
 
   WorkoutDatabase._init();
 
   Future<Database> get database async {
     if (_database != null) return _database!;
-    _database = await _initDB('workout.db');
-    return _database!;
+    _opening ??= _initDB('workout.db');
+    try {
+      _database = await _opening!;
+      return _database!;
+    } catch (_) {
+      _opening = null; // let a later call retry a failed open
+      rethrow;
+    }
   }
 
   Future<Database> _initDB(String filePath) async {
