@@ -1,7 +1,7 @@
 name: aawara
 description: "Aawara - Personal fitness tracker built with Flutter"
 publish_to: 'none'
-version: 1.0.5+6
+version: 1.0.6+7
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

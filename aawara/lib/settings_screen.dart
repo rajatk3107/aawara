@@ -301,10 +301,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: TextStyle(
               color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
         ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        // Only show a back button when this screen was pushed as its own route
+        // (e.g. opened from Home). As a bottom-nav tab there's nothing to pop —
+        // popping the root route showed a black screen.
+        automaticallyImplyLeading: false,
+        leading: Navigator.of(context).canPop()
+            ? IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+                onPressed: () => Navigator.of(context).pop(),
+              )
+            : null,
         elevation: 0,
       ),
       body: ListView(
