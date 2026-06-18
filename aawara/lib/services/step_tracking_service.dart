@@ -29,6 +29,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:health/health.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:pedometer/pedometer.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,8 +47,11 @@ class StepTrackingService {
       StreamController<StepUpdate>.broadcast();
   static final Health _health = Health();
   static bool _healthConfigured = false;
+  static bool _nativeRegistrationLogged = false;
   static const _healthConnectTypes = [HealthDataType.STEPS];
   static const _healthConnectPermissions = [HealthDataAccess.READ];
+  static const MethodChannel _healthConnectDiagnosticsChannel =
+      MethodChannel('aawara/health_connect_diagnostics');
 
   static Stream<StepUpdate> get stepStream => _stepController.stream;
 
@@ -296,6 +300,7 @@ class StepTrackingService {
         'Health plugin configured; deviceId=${_health.deviceId}',
       );
     }
+    await _logNativeHealthConnectRegistration();
     return _health;
   }
 
@@ -312,6 +317,7 @@ class StepTrackingService {
       'Requesting permissions: types=$_healthConnectTypes, '
       'permissions=$_healthConnectPermissions',
     );
+    _logHealthConnect('Launching Health Connect permission request intent');
     final authorized = await health.requestAuthorization(
       _healthConnectTypes,
       permissions: _healthConnectPermissions,
@@ -375,6 +381,28 @@ class StepTrackingService {
     debugPrint('[HealthConnectSteps] $message');
   }
 
+  static Future<void> _logNativeHealthConnectRegistration() async {
+    if (!Platform.isAndroid || _nativeRegistrationLogged) return;
+    _nativeRegistrationLogged = true;
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      _logHealthConnect(
+        'Flutter package info: package=${packageInfo.packageName}, '
+        'appName=${packageInfo.appName}, '
+        'version=${packageInfo.version}+${packageInfo.buildNumber}',
+      );
+
+      final diagnostics = await _healthConnectDiagnosticsChannel
+          .invokeMapMethod<String, dynamic>('inspect');
+      _logHealthConnect('Native registration diagnostics: $diagnostics');
+    } catch (error, stackTrace) {
+      _logHealthConnect(
+        'Native Health Connect registration diagnostics failed: $error',
+      );
+      debugPrintStack(stackTrace: stackTrace);
+    }
+  }
+
   // ── Android ──────────────────────────────────────────────────────────────
 
   // Wire up the UI stream listener. Android service updates already include
@@ -401,9 +429,10 @@ class StepTrackingService {
         await _configureAndroidService();
         await svc.startService();
       }
-    } catch (_) {
-      // ForegroundServiceStartNotAllowedException or similar — ignore,
-      // the service will be started on the next foreground resume.
+    } catch (error, stackTrace) {
+      _logHealthConnect('Android step service start failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      // The service will be started on the next foreground resume.
     }
   }
 
