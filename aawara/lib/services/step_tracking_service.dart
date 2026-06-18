@@ -189,12 +189,16 @@ class StepTrackingService {
   // Returns 0 if Health Connect is unavailable or permission not granted.
   static Future<int> _getHealthConnectStepsForDay(DateTime date) async {
     if (!Platform.isAndroid) return 0;
-    final now = DateTime.now();
     final start = DateTime(date.year, date.month, date.day);
-    final isToday = date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day;
-    final end = isToday ? now : DateTime(date.year, date.month, date.day + 1);
+    // Always end the window at next-midnight — never at `now`. Samsung Health
+    // writes a single step record that spans the WHOLE calendar day
+    // (00:00:00 → 23:59:59.999) holding the day's running total. If we query
+    // with end=now, Health Connect's aggregate() proportionally slices that
+    // all-day record by the elapsed fraction of the day and returns an
+    // undercount (e.g. 7335 steps → 6540 at 89% through the day). Ending at
+    // next-midnight makes the window fully contain the record, so aggregate
+    // returns the true total. No future steps exist, so this never overcounts.
+    final end = DateTime(date.year, date.month, date.day + 1);
 
     try {
       final health = await _configuredHealth();
