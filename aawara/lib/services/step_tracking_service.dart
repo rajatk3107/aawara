@@ -23,6 +23,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart' hide Priority;
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
@@ -43,6 +44,10 @@ class StepUpdate {
 class StepTrackingService {
   static final _stepController =
       StreamController<StepUpdate>.broadcast();
+  static final Health _health = Health();
+  static bool _healthConfigured = false;
+  static const _healthConnectTypes = [HealthDataType.STEPS];
+  static const _healthConnectPermissions = [HealthDataAccess.READ];
 
   static Stream<StepUpdate> get stepStream => _stepController.stream;
 
@@ -179,17 +184,45 @@ class StepTrackingService {
   // Reads today's steps from Health Connect (includes Samsung Watch).
   // Returns 0 if Health Connect is unavailable or permission not granted.
   static Future<int> _getHealthConnectStepsForDay(DateTime date) async {
+    if (!Platform.isAndroid) return 0;
+    final now = DateTime.now();
+    final start = DateTime(date.year, date.month, date.day);
+    final isToday = date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
+    final end = isToday ? now : DateTime(date.year, date.month, date.day + 1);
+
     try {
-      final health = Health();
-      final start = DateTime(date.year, date.month, date.day);
-      final end = date.year == DateTime.now().year &&
-              date.month == DateTime.now().month &&
-              date.day == DateTime.now().day
-          ? DateTime.now()
-          : DateTime(date.year, date.month, date.day, 23, 59, 59);
+      final health = await _configuredHealth();
+      final canRead = await _logHealthConnectDiagnostics(
+        health,
+        start: start,
+        end: end,
+      );
+      if (!canRead) return 0;
+
+      final records = await health.getHealthDataFromTypes(
+        types: _healthConnectTypes,
+        startTime: start,
+        endTime: end,
+      );
+      _logHealthConnect('Raw step records returned: ${records.length}');
+      for (final point in records) {
+        _logHealthDataPoint(point);
+      }
+
+      final rawTotal = records.fold<int>(
+        0,
+        (sum, point) => sum + _pointSteps(point),
+      );
+      _logHealthConnect('Raw step total: $rawTotal');
+
       final steps = await health.getTotalStepsInInterval(start, end);
-      return steps ?? 0;
-    } catch (_) {
+      _logHealthConnect('Aggregated step count: ${steps ?? 'null'}');
+      return steps ?? rawTotal;
+    } catch (error, stackTrace) {
+      _logHealthConnect('Health Connect step read failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return 0;
     }
   }
@@ -202,11 +235,8 @@ class StepTrackingService {
   }) async {
     if (!Platform.isAndroid) return (updated: 0, skipped: 0);
     try {
-      final health = Health();
-      final authorized = await health.requestAuthorization(
-        [HealthDataType.STEPS],
-        permissions: [HealthDataAccess.READ],
-      );
+      final health = await _configuredHealth();
+      final authorized = await _ensureHealthConnectPermission(health);
       if (!authorized) return (updated: 0, skipped: 0);
 
       final prefs = await SharedPreferences.getInstance();
@@ -234,7 +264,9 @@ class StepTrackingService {
         }
       }
       return (updated: updated, skipped: skipped);
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logHealthConnect('Health Connect history sync failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return (updated: 0, skipped: 0);
     }
   }
@@ -243,15 +275,104 @@ class StepTrackingService {
   static Future<bool> hasHealthConnectPermission() async {
     if (!Platform.isAndroid) return false;
     try {
-      final health = Health();
+      final health = await _configuredHealth();
       return await health.hasPermissions(
-            [HealthDataType.STEPS],
-            permissions: [HealthDataAccess.READ],
+            _healthConnectTypes,
+            permissions: _healthConnectPermissions,
           ) ??
           false;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logHealthConnect('Health Connect permission check failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return false;
     }
+  }
+
+  static Future<Health> _configuredHealth() async {
+    if (!_healthConfigured) {
+      await _health.configure();
+      _healthConfigured = true;
+      _logHealthConnect(
+        'Health plugin configured; deviceId=${_health.deviceId}',
+      );
+    }
+    return _health;
+  }
+
+  static Future<bool> _ensureHealthConnectPermission(Health health) async {
+    final granted = await health.hasPermissions(
+          _healthConnectTypes,
+          permissions: _healthConnectPermissions,
+        ) ??
+        false;
+    _logHealthConnect('Permission granted before request: $granted');
+    if (granted) return true;
+
+    _logHealthConnect(
+      'Requesting permissions: types=$_healthConnectTypes, '
+      'permissions=$_healthConnectPermissions',
+    );
+    final authorized = await health.requestAuthorization(
+      _healthConnectTypes,
+      permissions: _healthConnectPermissions,
+    );
+    _logHealthConnect('Permission request result: $authorized');
+    return authorized;
+  }
+
+  static Future<bool> _logHealthConnectDiagnostics(
+    Health health, {
+    required DateTime start,
+    required DateTime end,
+  }) async {
+    final sdkStatus = await health.getHealthConnectSdkStatus();
+    final available = await health.isHealthConnectAvailable();
+    final granted = await health.hasPermissions(
+          _healthConnectTypes,
+          permissions: _healthConnectPermissions,
+        ) ??
+        false;
+    _logHealthConnect('SDK status: $sdkStatus');
+    _logHealthConnect('Available: $available');
+    _logHealthConnect(
+      'Requested permissions: types=$_healthConnectTypes, '
+      'permissions=$_healthConnectPermissions',
+    );
+    _logHealthConnect('Permission granted: $granted');
+    _logHealthConnect('Platform: ${health.platformType}');
+    _logHealthConnect('Start local: $start, utc: ${start.toUtc()}');
+    _logHealthConnect('End local: $end, utc: ${end.toUtc()}');
+    _logHealthConnect(
+      'Epoch ms: ${start.millisecondsSinceEpoch} -> '
+      '${end.millisecondsSinceEpoch}',
+    );
+    return available && granted;
+  }
+
+  static void _logHealthDataPoint(HealthDataPoint point) {
+    _logHealthConnect(
+      'HealthDataPoint '
+      'type=${point.type}, value=${point.value}, '
+      'from=${point.dateFrom} (${point.dateFrom.toUtc()}), '
+      'to=${point.dateTo} (${point.dateTo.toUtc()}), '
+      'sourceName=${point.sourceName}, sourceId=${point.sourceId}, '
+      'deviceId=${point.sourceDeviceId}, deviceModel=${point.deviceModel}, '
+      'recordingMethod=${point.recordingMethod}, '
+      'platform=${point.sourcePlatform}, metadata=${point.metadata}',
+    );
+  }
+
+  static int _pointSteps(HealthDataPoint point) {
+    final value = point.value;
+    if (value is NumericHealthValue) {
+      return value.numericValue.round();
+    }
+    final match = RegExp(r'[-+]?\d+(\.\d+)?').firstMatch(value.toString());
+    return match == null ? 0 : (double.tryParse(match.group(0)!) ?? 0).round();
+  }
+
+  static void _logHealthConnect(String message) {
+    debugPrint('[HealthConnectSteps] $message');
   }
 
   // ── Android ──────────────────────────────────────────────────────────────
@@ -435,14 +556,16 @@ class StepTrackingService {
   // ── iOS ───────────────────────────────────────────────────────────────────
 
   static Future<bool> _enableIOS() async {
-    final health = Health();
+    final health = await _configuredHealth();
     try {
       final authorized = await health.requestAuthorization(
         [HealthDataType.STEPS],
         permissions: [HealthDataAccess.READ],
       );
       if (!authorized) return false;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logHealthConnect('iOS health authorization failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return false;
     }
     final prefs = await SharedPreferences.getInstance();
@@ -452,12 +575,14 @@ class StepTrackingService {
 
   static Future<int> _getIosSteps() async {
     try {
-      final health = Health();
+      final health = await _configuredHealth();
       final now = DateTime.now();
       final midnight = DateTime(now.year, now.month, now.day);
       final steps = await health.getTotalStepsInInterval(midnight, now);
       return steps ?? 0;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logHealthConnect('iOS step read failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
       return 0;
     }
   }
