@@ -11,6 +11,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH"/>
     <!-- Health Connect — reads steps synced from Samsung Health / Samsung Watch -->
     <uses-permission android:name="android.permission.health.READ_STEPS"/>
+    <!-- Allows the foreground step service to read Health Connect while the
+         app UI is closed, so the watch total keeps syncing in the background -->
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"/>
 
     <application
         android:label="Aawara"

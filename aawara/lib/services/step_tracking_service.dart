@@ -23,6 +23,7 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui' show DartPluginRegistrant;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart' hide Priority;
 import 'package:flutter/services.dart';
@@ -187,7 +188,10 @@ class StepTrackingService {
 
   // Reads today's steps from Health Connect (includes Samsung Watch).
   // Returns 0 if Health Connect is unavailable or permission not granted.
-  static Future<int> _getHealthConnectStepsForDay(DateTime date) async {
+  static Future<int> _getHealthConnectStepsForDay(
+    DateTime date, {
+    bool verbose = false,
+  }) async {
     if (!Platform.isAndroid) return 0;
     final start = DateTime(date.year, date.month, date.day);
     // Always end the window at next-midnight — never at `now`. Samsung Health
@@ -206,6 +210,7 @@ class StepTrackingService {
         health,
         start: start,
         end: end,
+        verbose: verbose,
       );
       if (!canRead) return 0;
 
@@ -214,19 +219,23 @@ class StepTrackingService {
         startTime: start,
         endTime: end,
       );
-      _logHealthConnect('Raw step records returned: ${records.length}');
-      for (final point in records) {
-        _logHealthDataPoint(point);
+      if (verbose) {
+        _logHealthConnect('Raw step records returned: ${records.length}');
+        for (final point in records) {
+          _logHealthDataPoint(point);
+        }
       }
 
       final rawTotal = records.fold<int>(
         0,
         (sum, point) => sum + _pointSteps(point),
       );
-      _logHealthConnect('Raw step total: $rawTotal');
 
       final steps = await health.getTotalStepsInInterval(start, end);
-      _logHealthConnect('Aggregated step count: ${steps ?? 'null'}');
+      if (verbose) {
+        _logHealthConnect('Raw step total: $rawTotal');
+        _logHealthConnect('Aggregated step count: ${steps ?? 'null'}');
+      }
       return steps ?? rawTotal;
     } catch (error, stackTrace) {
       _logHealthConnect('Health Connect step read failed: $error');
@@ -309,53 +318,76 @@ class StepTrackingService {
   }
 
   static Future<bool> _ensureHealthConnectPermission(Health health) async {
-    final granted = await health.hasPermissions(
+    var granted = await health.hasPermissions(
           _healthConnectTypes,
           permissions: _healthConnectPermissions,
         ) ??
         false;
     _logHealthConnect('Permission granted before request: $granted');
-    if (granted) return true;
 
-    _logHealthConnect(
-      'Requesting permissions: types=$_healthConnectTypes, '
-      'permissions=$_healthConnectPermissions',
-    );
-    _logHealthConnect('Launching Health Connect permission request intent');
-    final authorized = await health.requestAuthorization(
-      _healthConnectTypes,
-      permissions: _healthConnectPermissions,
-    );
-    _logHealthConnect('Permission request result: $authorized');
-    return authorized;
+    if (!granted) {
+      _logHealthConnect(
+        'Requesting permissions: types=$_healthConnectTypes, '
+        'permissions=$_healthConnectPermissions',
+      );
+      _logHealthConnect('Launching Health Connect permission request intent');
+      granted = await health.requestAuthorization(
+        _healthConnectTypes,
+        permissions: _healthConnectPermissions,
+      );
+      _logHealthConnect('Permission request result: $granted');
+    }
+
+    // Also request background read so the foreground service can keep the
+    // count synced with the watch while the app UI is closed.
+    await _ensureBackgroundReadPermission(health);
+    return granted;
+  }
+
+  // Requests Health Connect's "read in background" permission if the device
+  // supports it and it hasn't been granted yet. Non-fatal if declined — the
+  // count still syncs whenever the app is open.
+  static Future<void> _ensureBackgroundReadPermission(Health health) async {
+    try {
+      if (!await health.isHealthDataInBackgroundAvailable()) return;
+      if (await health.isHealthDataInBackgroundAuthorized()) return;
+      final ok = await health.requestHealthDataInBackgroundAuthorization();
+      _logHealthConnect('Background read authorization result: $ok');
+    } catch (error, stackTrace) {
+      _logHealthConnect('Background read authorization failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   static Future<bool> _logHealthConnectDiagnostics(
     Health health, {
     required DateTime start,
     required DateTime end,
+    bool verbose = false,
   }) async {
-    final sdkStatus = await health.getHealthConnectSdkStatus();
     final available = await health.isHealthConnectAvailable();
     final granted = await health.hasPermissions(
           _healthConnectTypes,
           permissions: _healthConnectPermissions,
         ) ??
         false;
-    _logHealthConnect('SDK status: $sdkStatus');
-    _logHealthConnect('Available: $available');
-    _logHealthConnect(
-      'Requested permissions: types=$_healthConnectTypes, '
-      'permissions=$_healthConnectPermissions',
-    );
-    _logHealthConnect('Permission granted: $granted');
-    _logHealthConnect('Platform: ${health.platformType}');
-    _logHealthConnect('Start local: $start, utc: ${start.toUtc()}');
-    _logHealthConnect('End local: $end, utc: ${end.toUtc()}');
-    _logHealthConnect(
-      'Epoch ms: ${start.millisecondsSinceEpoch} -> '
-      '${end.millisecondsSinceEpoch}',
-    );
+    if (verbose) {
+      final sdkStatus = await health.getHealthConnectSdkStatus();
+      _logHealthConnect('SDK status: $sdkStatus');
+      _logHealthConnect('Available: $available');
+      _logHealthConnect(
+        'Requested permissions: types=$_healthConnectTypes, '
+        'permissions=$_healthConnectPermissions',
+      );
+      _logHealthConnect('Permission granted: $granted');
+      _logHealthConnect('Platform: ${health.platformType}');
+      _logHealthConnect('Start local: $start, utc: ${start.toUtc()}');
+      _logHealthConnect('End local: $end, utc: ${end.toUtc()}');
+      _logHealthConnect(
+        'Epoch ms: ${start.millisecondsSinceEpoch} -> '
+        '${end.millisecondsSinceEpoch}',
+      );
+    }
     return available && granted;
   }
 
@@ -454,7 +486,16 @@ class StepTrackingService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('step_tracking_enabled', true);
 
-    // 4. Show battery tip once
+    // 4. Request Health Connect read (incl. background) so the watch total
+    //    keeps the count in sync even when the app is closed. Non-fatal.
+    try {
+      await _ensureHealthConnectPermission(await _configuredHealth());
+    } catch (error, stackTrace) {
+      _logHealthConnect('Health Connect enable-time auth failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
+
+    // 5. Show battery tip once
     await _maybeShowBatteryTip();
 
     return true;
@@ -482,11 +523,25 @@ class StepTrackingService {
 
   @pragma('vm:entry-point')
   static Future<void> _onAndroidServiceStart(ServiceInstance service) async {
+    // Register plugins for this background isolate so the `health` plugin
+    // (Health Connect reads) works here, not just on the UI isolate.
+    DartPluginRegistrant.ensureInitialized();
+
     final prefs = await SharedPreferences.getInstance();
     int? midnightBaseline;
-    int latestAutomaticSteps = 0;
+    int latestPedometerSteps = 0; // today's count from the phone pedometer
+    int latestHcSteps = 0; // today's total from Health Connect (the watch)
+    int latestAutomaticSteps = 0; // merged max(pedometer, HC) — used everywhere
     final androidService =
         service is AndroidServiceInstance ? service : null;
+
+    // Seed a floor from the last persisted value so the displayed count never
+    // visibly drops to 0 while the service restarts and re-reads its sources.
+    final seed = await WorkoutDatabase.instance.getStepLog(_todayDate());
+    if (seed != null) {
+      latestHcSteps = (seed['steps'] as num).toInt();
+      latestAutomaticSteps = latestHcSteps;
+    }
 
     Future<void> updateForegroundNotification(int steps, int goal) async {
       if (androidService != null) {
@@ -503,6 +558,58 @@ class StepTrackingService {
       androidService.setAsForegroundService();
     }
 
+    // Single place that merges the two sources and pushes the result out.
+    // Health Connect (the watch) is authoritative; the phone pedometer only
+    // adds live increments and can NEVER pull the count below the HC value.
+    // Both the DB and the foreground notification reflect this merged total.
+    Future<void> pushUpdate() async {
+      final today = _todayDate();
+      final goal = prefs.getInt('step_goal') ?? 8000;
+      // Reload so manual corrections written by the UI isolate are visible.
+      await prefs.reload();
+      final manualAdjustment = prefs.getInt('step_manual_add_$today') ?? 0;
+
+      final automatic = latestPedometerSteps > latestHcSteps
+          ? latestPedometerSteps
+          : latestHcSteps;
+      latestAutomaticSteps = automatic;
+      final adjustedSteps =
+          (automatic + manualAdjustment).clamp(0, 1 << 31).toInt();
+
+      await WorkoutDatabase.instance.upsertStepLog(today, automatic, goal);
+      await updateForegroundNotification(adjustedSteps, goal);
+
+      // Fire goal notification once per day
+      final notifiedKey = 'step_goal_notified_$today';
+      final notifyEnabled = prefs.getBool('step_notify_goal') ?? true;
+      if (adjustedSteps >= goal &&
+          notifyEnabled &&
+          !(prefs.getBool(notifiedKey) ?? false)) {
+        await prefs.setBool(notifiedKey, true);
+        _fireGoalNotification(adjustedSteps, goal);
+      }
+
+      service.invoke('stepUpdate', {'steps': adjustedSteps, 'goal': goal});
+    }
+
+    // Pull the watch's step total from Health Connect. Runs on a timer so steps
+    // walked with the phone stationary (counted only by the watch) still show.
+    // latestHcSteps only ever increases within a day, so a transient empty read
+    // (e.g. background read momentarily blocked) can't drop the count.
+    Future<void> pollHealthConnect() async {
+      try {
+        final hc = await _getHealthConnectStepsForDay(DateTime.now());
+        if (hc > latestHcSteps) {
+          latestHcSteps = hc;
+          _logHealthConnect('Background HC sync: $hc steps');
+          await pushUpdate();
+        }
+      } catch (error, stackTrace) {
+        _logHealthConnect('Background Health Connect poll failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+    }
+
     service.on('manualStepUpdate').listen((data) async {
       final goal = (data?['goal'] as num?)?.toInt() ??
           prefs.getInt('step_goal') ??
@@ -516,11 +623,10 @@ class StepTrackingService {
       service.invoke('stepUpdate', {'steps': adjustedSteps, 'goal': goal});
     });
 
-    // Listen to hardware pedometer
+    // Listen to the hardware pedometer for live increments between HC syncs.
     Pedometer.stepCountStream.listen((StepCount event) async {
       final totalSinceBoot = event.steps;
       final today = _todayDate();
-      final goal = prefs.getInt('step_goal') ?? 8000;
 
       // Resolve midnight baseline
       final storedBaseline = prefs.getInt('step_baseline_$today');
@@ -535,33 +641,16 @@ class StepTrackingService {
         midnightBaseline = storedBaseline;
       }
 
-      final todaySteps = totalSinceBoot - midnightBaseline!;
-      latestAutomaticSteps = todaySteps;
-      // Reload so manual corrections written by the UI isolate are visible here.
-      await prefs.reload();
-      final manualAdjustment = prefs.getInt('step_manual_add_$today') ?? 0;
-      final adjustedSteps =
-          (todaySteps + manualAdjustment).clamp(0, 1 << 31).toInt();
-
-      // Persist to SQLite
-      await WorkoutDatabase.instance.upsertStepLog(today, todaySteps, goal);
-
-      // Update foreground notification
-      await updateForegroundNotification(adjustedSteps, goal);
-
-      // Fire goal notification once per day
-      final notifiedKey = 'step_goal_notified_$today';
-      final notifyEnabled = prefs.getBool('step_notify_goal') ?? true;
-      if (adjustedSteps >= goal &&
-          notifyEnabled &&
-          !(prefs.getBool(notifiedKey) ?? false)) {
-        await prefs.setBool(notifiedKey, true);
-        _fireGoalNotification(adjustedSteps, goal);
-      }
-
-      // Push to UI
-      service.invoke('stepUpdate', {'steps': adjustedSteps, 'goal': goal});
+      latestPedometerSteps = totalSinceBoot - midnightBaseline!;
+      await pushUpdate();
     });
+
+    // Correct against Health Connect now, then every 30s.
+    await pollHealthConnect();
+    final hcTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => pollHealthConnect(),
+    );
 
     // Midnight cleanup
     Timer.periodic(const Duration(minutes: 1), (_) {
@@ -569,10 +658,16 @@ class StepTrackingService {
       if (now.hour == 0 && now.minute == 0) {
         prefs.remove('step_baseline_${_yesterdayDate()}');
         midnightBaseline = null;
+        latestPedometerSteps = 0;
+        latestHcSteps = 0;
+        latestAutomaticSteps = 0;
       }
     });
 
-    service.on('stopService').listen((_) => service.stopSelf());
+    service.on('stopService').listen((_) {
+      hcTimer.cancel();
+      service.stopSelf();
+    });
   }
 
   @pragma('vm:entry-point')
