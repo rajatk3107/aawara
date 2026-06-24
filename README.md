@@ -176,6 +176,25 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 
 ---
 
+### Supplements
+
+**Daily Protocol**
+- Accessible from the workout home navigation ("Supplements · Daily protocol")
+- Add supplements with a name, optional dose (e.g. "75 mcg", "5 g", "1 softgel"), and a time of day
+- **Today summary** — progress bar showing how many of the day's supplements have been taken (e.g. "3 / 5 taken")
+- **Timeline grouping** — supplements auto-sorted into 🌅 Morning, ☀️ Midday, 🌆 Evening, and 🌙 Night buckets by their scheduled time
+- Tap a supplement to mark it taken (green check); tap again to undo; long-press to edit
+- **7-day adherence** shown per supplement (e.g. "5/7 days this week")
+
+**Interactive Reminders**
+- A daily reminder fires at each supplement's chosen time with two action buttons in the notification:
+  - **✓ Taken** — logs the supplement as taken for today straight from the notification drawer, without opening the app; works even when the app is fully closed (handled in a background isolate). Logging is idempotent, so a double-tap is safe
+  - **💤 Snooze** — opens the app to a quick picker (15 min / 30 min / 1 hour) that re-fires the same reminder after the chosen delay
+- Tapping the notification body opens the Supplements screen
+- If the Supplements screen is already open, marking a supplement taken from the notification updates the list live
+
+---
+
 ### Notes
 - Rich text editor (flutter_quill) for workout notes, thoughts, or anything else
 - All notes stored locally in SQLite
@@ -196,6 +215,7 @@ A privacy-first, offline fitness tracking app built with Flutter. All data is st
 **Profile & Notifications**
 - Profile photo and name (set during onboarding, editable in settings)
 - Configurable workout reminder notifications
+- Interactive supplement reminders with Taken / Snooze actions (see Supplements)
 
 ---
 
@@ -232,7 +252,9 @@ lib/
 ├── home_screen.dart
 ├── settings_screen.dart
 ├── services/
-│   ├── notification_service.dart
+│   ├── notification_service.dart       # Reminders + interactive supplement actions
+│   ├── supplement_payload.dart         # Notification payload encode/decode (unit-tested)
+│   ├── supplement_events.dart          # Live-refresh + pending-snooze signals
 │   └── step_tracking_service.dart      # Android background service + iOS HealthKit
 ├── notes/
 │   ├── note_model.dart
@@ -256,10 +278,11 @@ lib/
 │       └── water_tracker_card.dart
 └── workout/
     ├── database/
-    │   └── workout_database.dart       # SQLite singleton, all migrations (v19)
+    │   └── workout_database.dart       # SQLite singleton, all migrations (v20)
     ├── models/
     │   ├── exercise.dart
     │   ├── workout_log.dart
+    │   ├── supplement.dart             # Supplement + SupplementLog models
     │   └── workout_plan_day.dart
     ├── screens/
     │   ├── workout_home_screen.dart
@@ -269,6 +292,7 @@ lib/
     │   ├── workout_history_screen.dart
     │   ├── workout_plan_screen.dart
     │   ├── exercise_library_screen.dart
+    │   ├── supplements_screen.dart
     │   ├── progress_screen.dart
     │   ├── body_measurements_screen.dart
     │   ├── exercise_progress_screen.dart
@@ -282,6 +306,7 @@ lib/
         ├── muscle_group_filter.dart
         ├── set_log_tile.dart
         ├── step_counter_card.dart      # Step count, edit, refresh
+        ├── snooze_picker_sheet.dart     # Supplement snooze picker + root listener
         ├── workout_heatmap.dart
         └── empty_state_widget.dart
 ```
@@ -306,6 +331,8 @@ Single SQLite file (`workout.db`) managed by a singleton `WorkoutDatabase`. All 
 | `body_measurements` | Per-type measurement history (waist, chest, etc.) |
 | `exercise_prs` | Personal records per exercise (best 1RM) |
 | `wellness_logs` | Daily sleep, energy, and soreness entries |
+| `supplements` | User supplements (name, dose, reminder time, sort order) |
+| `supplement_logs` | Per-day taken log, keyed by `(supplement_id, date)` |
 | `achievements_unlocked` | Unlocked achievement IDs with timestamps |
 | `foods` | Food library (~220 seeded foods + custom; includes sugar, sodium, sat fat, trans fat, cholesterol) |
 | `nutrition_logs` | One row per date |
@@ -319,7 +346,7 @@ Single SQLite file (`workout.db`) managed by a singleton `WorkoutDatabase`. All 
 | `step_logs` | Daily step count and goal |
 | `progress_photos` | Body progress photos with date |
 
-Current schema version: **19**
+Current schema version: **20**
 
 ---
 
@@ -370,3 +397,4 @@ All data is stored locally. The only outbound network request is the optional Op
 | 1.8 | Step tracking (Android foreground service + iOS HealthKit); Samsung Health Connect integration; manual step total override; step counter card on home screen |
 | 1.9 | Dynamic meal system — numbered meals (Meal 1–5+), custom names, create/delete meal slots, meal picker when adding food; per-entry ⋮ menu (edit quantity, move to meal, delete); delete entire meal; decimal portion sizes; nutrition formula fix (correct per-serving scaling for all foods); extended nutrition fields (sugar, sodium, saturated fat, trans fat, cholesterol); TDEE custom goal overrides; AI export respects date range; body measurements quick-access tile; protein tile navigates to nutrition |
 | 1.10 | Date-aware home screen — protein/calorie pill, water, wellness, weight, and step counter all reflect the selected date; new `getBodyWeightAsOf(date)` returns the as-of-date weight; step counter card now accepts a `date` param and switches between live and historical mode; historical step values are editable and write directly to that date's `step_logs` row; custom food create-form now stores values correctly (per-serving → per-100 g conversion); ⋮ menu on custom food rows in the search list (Edit / Delete); workout timer header redesigned — RUNNING / PAUSED badge with green/orange color coding, labeled Pause / Resume button, timer never auto-pauses on navigation; nut nutrition values corrected to USDA (Almonds, Cashews, Walnuts, Pistachios); two new milk variants added (Indian Cow / Buffalo milk without malai) |
+| 1.11 | Interactive supplement reminders — daily notifications now carry **✓ Taken** and **💤 Snooze** action buttons; Taken logs the supplement straight from the drawer and works even when the app is killed (background isolate, idempotent on `supplement_logs`); Snooze opens an in-app 15m / 30m / 1h picker that re-fires the reminder; open Supplements screen refreshes live when marked from a notification; dedicated `supplement_reminders` channel; `ActionBroadcastReceiver` registered in the manifest so action taps reach Dart when backgrounded |
