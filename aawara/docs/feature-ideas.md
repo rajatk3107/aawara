@@ -11,7 +11,7 @@ Effort is rough engineering size; impact is perceived user value.
 
 ## ⭐ Recommended next three
 
-- [ ] **Progress photos** — plumbing is half-there (`progress_photos` table exists, no UI)
+- [x] **Progress photos** — ✅ already shipped (timeline, add/crop/note, detail view, compare side-by-side, share). Backlog item was stale.
 - [ ] **Progressive-overload hints** — high impact, uses sets you already store
 - [ ] **Weekly review screen** — ties all the data together
 
@@ -19,14 +19,17 @@ Effort is rough engineering size; impact is perceived user value.
 
 ## Quick wins (small, high value)
 
-- [ ] 🟢 **Progress photos** — `progress_photos` table already exists with no feature wired
-  to it. Photo timeline + side-by-side before/after comparison. Mostly UI on existing plumbing.
+- [x] 🟢 **Progress photos** — ✅ already implemented in `progress_photos_screen.dart` (grid
+  timeline, camera/gallery + crop + note, zoomable detail, compare-mode side-by-side, share).
+  Reachable from the workout home nav and the Progress screen.
 - [ ] 🟢 **Supplement refill reminders** — optional "X servings left" count that decrements
   on each "Taken" and warns when ~7 days remain. Natural extension of the new supplement feature.
 - [ ] 🟢 **Water & weigh-in reminders** — scheduled nudges using existing notification infra
   and daily water / body-weight logs.
 - [ ] 🟢 **Plate calculator** — given a target barbell weight, show the plates per side. Pure logic.
-- [ ] 🟢 **Standalone 1RM calculator** — estimate one-rep-max from weight × reps. Pure logic.
+- [x] 🟢 **Standalone 1RM calculator** — ✅ shipped. Epley estimate from weight × reps + a
+  rep/percentage table (2/3/5/8/10/12 reps). Reachable from home Quick Access and the Progress
+  screen. `one_rep_max.dart` (unit-tested) + `one_rep_max_calculator_screen.dart`.
 
 ## Workout depth
 

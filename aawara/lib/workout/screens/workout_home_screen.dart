@@ -23,6 +23,7 @@ import 'body_measurements_screen.dart';
 import 'supplements_screen.dart';
 import 'lab_values_screen.dart';
 import 'progress_photos_screen.dart';
+import 'one_rep_max_calculator_screen.dart';
 
 class WorkoutHomeScreen extends StatefulWidget {
   const WorkoutHomeScreen({super.key});
@@ -1597,6 +1598,13 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
           const Color(0xFFF39C12), () {
         Navigator.push(context,
             MaterialPageRoute(builder: (_) => const ProgressPhotosScreen()));
+      }),
+      _NavItem(Icons.calculate_rounded, '1RM Calc', 'Estimate max',
+          const Color(0xFF2ECC71), () {
+        Navigator.push(
+            context,
+            MaterialPageRoute(
+                builder: (_) => const OneRepMaxCalculatorScreen()));
       }),
     ];
 
