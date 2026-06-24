@@ -355,7 +355,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             // Toolbar
             QuillSimpleToolbar(
                 controller: _quillController,
-                configurations: QuillSimpleToolbarConfigurations(
+                config: QuillSimpleToolbarConfig(
                   color: const Color(0xFF111120),
                   multiRowsDisplay: false,
                   showBoldButton: true,
@@ -409,7 +409,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 controller: _quillController,
                 focusNode: _focusNode,
                 scrollController: _scrollController,
-                configurations: QuillEditorConfigurations(
+                config: QuillEditorConfig(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
                   placeholder: 'Start writing…',
                   expands: false,
@@ -447,13 +447,9 @@ class _LocalImageEmbedBuilder extends EmbedBuilder {
   @override
   Widget build(
     BuildContext context,
-    QuillController controller,
-    Embed node,
-    bool readOnly,
-    bool inline,
-    TextStyle textStyle,
+    EmbedContext embedContext,
   ) {
-    final path = node.value.data as String;
+    final path = embedContext.node.value.data as String;
     final file = File(path);
     if (!file.existsSync()) {
       return const Padding(

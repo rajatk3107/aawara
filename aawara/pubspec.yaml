@@ -1,7 +1,7 @@
 name: aawara
 description: "Aawara - Personal fitness tracker built with Flutter"
 publish_to: 'none'
-version: 1.0.8+9
+version: 1.0.9+10
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -15,7 +15,7 @@ dependencies:
   image_cropper: ^7.0.0
   shared_preferences: ^2.3.2
   path_provider: ^2.1.4
-  flutter_quill: ^10.0.0
+  flutter_quill: ^11.0.0
   sqflite: ^2.3.3
   path: ^1.9.0
   uuid: ^4.4.0
@@ -36,6 +36,11 @@ dependencies:
 
 dependency_overrides:
   intl: ^0.20.0
+  # flutter_quill 11 pulls quill_native_bridge_web (needs web ^1.0.0), which
+  # clashes with image_cropper 7's web ^0.5.1. Both web impls are web-only and
+  # never compiled into this Android/iOS app, so forcing web ^1.0.0 lets pub
+  # resolve without a full image_cropper major upgrade.
+  web: ^1.0.0
 
 dev_dependencies:
   flutter_test:
