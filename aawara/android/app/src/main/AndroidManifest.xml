@@ -117,6 +117,13 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+        <!-- Also undeclared by the plugin: delivers notification ACTION-button
+             taps (supplement "Taken" / "Snooze") to the Dart handler, including
+             the background isolate when the app is killed. Without it the action
+             buttons appear but tapping them does nothing. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false" />
 
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../database/workout_database.dart';
 import '../models/supplement.dart';
 import '../../services/notification_service.dart';
+import '../../services/supplement_events.dart';
 import '../../utils/safe_navigation.dart';
 
 class SupplementsScreen extends StatefulWidget {
@@ -29,6 +30,14 @@ class _SupplementsScreenState extends State<SupplementsScreen> {
   void initState() {
     super.initState();
     _load();
+    // Reload "taken today" live when an action is handled from a notification.
+    supplementsChanged.addListener(_load);
+  }
+
+  @override
+  void dispose() {
+    supplementsChanged.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -67,16 +76,14 @@ class _SupplementsScreenState extends State<SupplementsScreen> {
     if (result == null || !mounted) return;
     final id = await _db.upsertSupplement(result);
     final saved = result.copyWith(id: id);
-    // Schedule reminder
+    // Schedule reminder with Taken / Snooze actions
     try {
       final parts = saved.timeHhmm.split(':');
-      await NotificationService.instance.scheduleDailyReminder(
-        id: 1000 + id,
+      await NotificationService.instance.scheduleSupplementReminder(
+        supplementId: id,
+        name: saved.name,
+        dose: saved.dose,
         time: TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1])),
-        title: '💊 ${saved.name}',
-        body: saved.dose != null && saved.dose!.isNotEmpty
-            ? '${saved.dose} · tap to mark taken'
-            : 'Tap to mark taken',
       );
     } catch (_) {}
     _load();

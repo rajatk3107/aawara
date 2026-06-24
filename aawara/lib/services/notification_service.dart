@@ -4,6 +4,34 @@ import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../workout/database/workout_database.dart';
+import 'supplement_events.dart';
+import 'supplement_payload.dart';
+
+/// Action button identifiers for interactive supplement reminders.
+const String kSupplementMarkTakenAction = 'mark_taken';
+const String kSupplementSnoozeAction = 'snooze';
+
+String _todayDate() {
+  final n = DateTime.now();
+  return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+}
+
+/// Background isolate handler for notification actions tapped while the app is
+/// backgrounded or killed. Must be a top-level/static function annotated for
+/// AOT entry. Only "mark taken" needs to do work here; "snooze" launches the
+/// app and is handled in the foreground.
+@pragma('vm:entry-point')
+void supplementNotificationBackgroundHandler(NotificationResponse response) {
+  if (response.actionId != kSupplementMarkTakenAction) return;
+  final payload = decodeSupplementPayload(response.payload);
+  if (payload == null) return;
+  // ensureInitialized() registers plugins (incl. sqflite) for this isolate.
+  WidgetsFlutterBinding.ensureInitialized();
+  // Idempotent: supplement_logs is keyed by (supplement_id, date).
+  WorkoutDatabase.instance.markSupplementTaken(payload.id, _todayDate());
+}
+
 class NotificationService {
   static final NotificationService instance = NotificationService._();
   NotificationService._();
@@ -13,6 +41,10 @@ class NotificationService {
 
   static const _channelId = 'workout_reminders';
   static const _channelName = 'Workout Reminders';
+
+  // Interactive supplement reminders (Taken / Snooze actions).
+  static const _supplementChannelId = 'supplement_reminders';
+  static const _supplementChannelName = 'Supplement Reminders';
 
   // Rest-timer alert (one-shot, fired when a between-sets rest finishes).
   static const _restChannelId = 'rest_timer';
@@ -34,8 +66,42 @@ class NotificationService {
     );
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: ios),
+      onDidReceiveNotificationResponse: _onForegroundResponse,
+      onDidReceiveBackgroundNotificationResponse:
+          supplementNotificationBackgroundHandler,
     );
     _initialized = true;
+  }
+
+  /// Foreground handler — runs while the app is alive. Mirrors the background
+  /// handler for "mark taken" but also refreshes any open Supplements screen,
+  /// and routes "snooze" to the in-app picker.
+  static void _onForegroundResponse(NotificationResponse response) {
+    final payload = decodeSupplementPayload(response.payload);
+    if (payload == null) return;
+    switch (response.actionId) {
+      case kSupplementMarkTakenAction:
+        WorkoutDatabase.instance.markSupplementTaken(payload.id, _todayDate());
+        notifySupplementsChanged();
+        instance.cancelById(1000 + payload.id);
+        break;
+      case kSupplementSnoozeAction:
+        requestSnooze(payload);
+        break;
+    }
+  }
+
+  /// If the app was launched by tapping "Snooze" from a terminated state, the
+  /// action arrives via launch details rather than the response callback. Route
+  /// it to the in-app picker. Call once after [initialize].
+  Future<void> handlePendingLaunchAction() async {
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    if (details == null || !details.didNotificationLaunchApp) return;
+    final resp = details.notificationResponse;
+    if (resp?.actionId == kSupplementSnoozeAction) {
+      final payload = decodeSupplementPayload(resp!.payload);
+      if (payload != null) requestSnooze(payload);
+    }
   }
 
   /// Requests the POST_NOTIFICATIONS permission on Android 13+.
@@ -88,38 +154,104 @@ class NotificationService {
     await _plugin.cancel(weekday);
   }
 
-  /// Schedules a daily repeating notification at [time]. [id] should be unique
-  /// per reminder (e.g., 1000 + supplement_id to avoid collision with weekly
-  /// workout reminders which use IDs 1–7).
-  Future<void> scheduleDailyReminder({
-    required int id,
-    required TimeOfDay time,
-    required String title,
-    required String body,
-  }) async {
-    const details = NotificationDetails(
+  // Supplement reminders use notification IDs 1000 + supplementId to avoid
+  // colliding with weekly workout reminders (IDs 1–7).
+  static int supplementNotifId(int supplementId) => 1000 + supplementId;
+
+  NotificationDetails _supplementDetails() {
+    return const NotificationDetails(
       android: AndroidNotificationDetails(
-        _channelId,
-        _channelName,
-        channelDescription: 'Daily reminders from Aawara',
+        _supplementChannelId,
+        _supplementChannelName,
+        channelDescription: 'Supplement reminders from Aawara',
         importance: Importance.high,
         priority: Priority.high,
         icon: '@mipmap/ic_launcher',
+        enableVibration: true,
+        actions: [
+          AndroidNotificationAction(
+            kSupplementMarkTakenAction,
+            '✓ Taken',
+            showsUserInterface: false,
+            cancelNotification: true,
+          ),
+          AndroidNotificationAction(
+            kSupplementSnoozeAction,
+            '💤 Snooze',
+            showsUserInterface: true,
+            cancelNotification: false,
+          ),
+        ],
       ),
-      iOS: DarwinNotificationDetails(),
+      iOS: DarwinNotificationDetails(categoryIdentifier: 'supplement'),
     );
+  }
+
+  String _supplementBody(String? dose) =>
+      (dose != null && dose.isNotEmpty) ? '$dose · time to take it' : 'Time to take it';
+
+  /// Schedules (or replaces) a daily repeating reminder for a supplement, with
+  /// "Taken" and "Snooze" action buttons.
+  Future<void> scheduleSupplementReminder({
+    required int supplementId,
+    required String name,
+    String? dose,
+    required TimeOfDay time,
+  }) async {
+    await initialize();
     final scheduled = _nextDailyOccurrence(time);
     await _plugin.zonedSchedule(
-      id,
-      title,
-      body,
+      supplementNotifId(supplementId),
+      '💊 $name',
+      _supplementBody(dose),
       scheduled,
-      details,
+      _supplementDetails(),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       matchDateTimeComponents: DateTimeComponents.time,
+      payload: encodeSupplementPayload(id: supplementId, name: name, dose: dose),
     );
+  }
+
+  /// Reschedules a one-shot supplement reminder [minutes] from now (snooze).
+  /// Cancels the original first, then fires a fresh copy with the same actions.
+  Future<void> scheduleSnooze({
+    required int supplementId,
+    required String name,
+    String? dose,
+    required int minutes,
+  }) async {
+    await initialize();
+    await _plugin.cancel(supplementNotifId(supplementId));
+    final when = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
+    final payload =
+        encodeSupplementPayload(id: supplementId, name: name, dose: dose);
+    try {
+      await _plugin.zonedSchedule(
+        supplementNotifId(supplementId),
+        '💊 $name',
+        _supplementBody(dose),
+        when,
+        _supplementDetails(),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        payload: payload,
+      );
+    } catch (_) {
+      await _plugin.zonedSchedule(
+        supplementNotifId(supplementId),
+        '💊 $name',
+        _supplementBody(dose),
+        when,
+        _supplementDetails(),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        payload: payload,
+      );
+    }
   }
 
   Future<void> cancelById(int id) async {
