@@ -3,12 +3,14 @@ import 'app_refresh.dart';
 import 'services/notification_service.dart';
 import 'services/step_tracking_service.dart';
 import 'splash_screen.dart';
-import 'workout/widgets/snooze_picker_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.instance.initialize();
   await NotificationService.instance.handlePendingLaunchAction();
+  // Apply any "taken" actions captured by the notification background handler
+  // while the app was closed.
+  await NotificationService.instance.drainPendingTaken();
   await StepTrackingService.initialize();
   runApp(const MyApp());
 }
@@ -33,9 +35,7 @@ class MyApp extends StatelessWidget {
         cardColor: const Color(0xFF1A1A2E),
         useMaterial3: true,
       ),
-      home: const _LifecycleWrapper(
-        child: SnoozeRequestListener(child: SplashScreen()),
-      ),
+      home: const _LifecycleWrapper(child: SplashScreen()),
     );
   }
 }

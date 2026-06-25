@@ -4,68 +4,37 @@ import '../../services/notification_service.dart';
 import '../../services/supplement_events.dart';
 import '../../services/supplement_payload.dart';
 
-/// Listens for snooze requests (set when the user taps "Snooze" on a supplement
-/// reminder) and presents the duration picker over whatever screen is active.
-/// Mount once near the app root, above the Navigator.
-class SnoozeRequestListener extends StatefulWidget {
-  final Widget child;
-  const SnoozeRequestListener({super.key, required this.child});
-
-  @override
-  State<SnoozeRequestListener> createState() => _SnoozeRequestListenerState();
-}
-
-class _SnoozeRequestListenerState extends State<SnoozeRequestListener> {
-  bool _showing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    pendingSnoozeRequest.addListener(_onRequest);
-    // Handle a request that arrived during a cold start (set before mount).
-    if (pendingSnoozeRequest.value != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _onRequest());
-    }
-  }
-
-  @override
-  void dispose() {
-    pendingSnoozeRequest.removeListener(_onRequest);
-    super.dispose();
-  }
-
-  Future<void> _onRequest() async {
-    final payload = pendingSnoozeRequest.value;
-    if (payload == null || _showing || !mounted) return;
-    _showing = true;
-    clearSnoozeRequest();
-    final minutes = await showSnoozePicker(context, payload);
-    _showing = false;
-    if (minutes == null) return;
-    await NotificationService.instance.scheduleSnooze(
-      supplementId: payload.id,
-      name: payload.name,
-      dose: payload.dose,
-      minutes: minutes,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFF1A1A2E),
-        content: Text(
-          'Snoozed ${payload.name} for ${_label(minutes)}',
-          style: const TextStyle(color: Colors.white),
-        ),
+/// Drives the snooze flow from a persistent host (e.g. MainScreen): shows the
+/// duration picker for [payload], reschedules the reminder, and confirms.
+///
+/// [context] must sit below a Navigator and ScaffoldMessenger. Call from a
+/// screen that is not torn down by navigation so the picker isn't dismissed
+/// mid-show.
+Future<void> handleSnoozeRequest(
+    BuildContext context, SupplementPayload payload) async {
+  clearSnoozeRequest();
+  final minutes = await showSnoozePicker(context, payload);
+  if (minutes == null) return;
+  await NotificationService.instance.scheduleSnooze(
+    supplementId: payload.id,
+    name: payload.name,
+    dose: payload.dose,
+    minutes: minutes,
+  );
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      backgroundColor: const Color(0xFF1A1A2E),
+      content: Text(
+        'Snoozed ${payload.name} for ${_snoozeLabel(minutes)}',
+        style: const TextStyle(color: Colors.white),
       ),
-    );
-  }
-
-  static String _label(int minutes) =>
-      minutes >= 60 ? '${minutes ~/ 60} hour' : '$minutes min';
-
-  @override
-  Widget build(BuildContext context) => widget.child;
+    ),
+  );
 }
+
+String _snoozeLabel(int minutes) =>
+    minutes >= 60 ? '${minutes ~/ 60} hour' : '$minutes min';
 
 /// Shows the snooze duration picker. Returns the chosen minutes, or null.
 Future<int?> showSnoozePicker(

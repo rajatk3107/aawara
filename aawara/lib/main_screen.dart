@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_refresh.dart';
+import 'services/notification_service.dart';
+import 'services/supplement_events.dart';
 import 'workout/screens/workout_home_screen.dart';
 import 'workout/screens/progress_screen.dart';
 import 'workout/screens/workout_history_screen.dart';
+import 'workout/widgets/snooze_picker_sheet.dart';
 import 'settings_screen.dart';
 import 'nutrition/screens/nutrition_screen.dart';
 
@@ -36,10 +39,28 @@ class _MainScreenState extends State<MainScreen>
     if (state is RefreshableState) (state as RefreshableState).refreshData();
   }
 
+  bool _showingSnooze = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Snooze taps route here (the persistent host) so the picker isn't torn
+    // down by splash navigation. Handles both runtime requests and one set
+    // during a cold start before this screen mounted.
+    pendingSnoozeRequest.addListener(_handleSnoozeRequest);
+    if (pendingSnoozeRequest.value != null) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _handleSnoozeRequest());
+    }
+  }
+
+  Future<void> _handleSnoozeRequest() async {
+    final payload = pendingSnoozeRequest.value;
+    if (payload == null || _showingSnooze || !mounted) return;
+    _showingSnooze = true;
+    await handleSnoozeRequest(context, payload);
+    _showingSnooze = false;
   }
 
   @override
@@ -51,6 +72,7 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   void dispose() {
+    pendingSnoozeRequest.removeListener(_handleSnoozeRequest);
     routeObserver.unsubscribe(this);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -62,7 +84,11 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshTab(_tab);
+    if (state == AppLifecycleState.resumed) {
+      // Apply "taken" actions captured while backgrounded, then refresh.
+      NotificationService.instance.drainPendingTaken();
+      _refreshTab(_tab);
+    }
   }
 
   void _onTabSelected(int i) {

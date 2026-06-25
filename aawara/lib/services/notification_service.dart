@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -5,6 +7,7 @@ import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../workout/database/workout_database.dart';
+import 'pending_supplement_taken.dart';
 import 'supplement_events.dart';
 import 'supplement_payload.dart';
 
@@ -17,19 +20,30 @@ String _todayDate() {
   return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
 }
 
+/// Plugin-free queue file shared between the main isolate and the plugin's
+/// background-action engine. `Directory.systemTemp` resolves to the app's cache
+/// dir and is identical across both isolates because they run in the same
+/// process — so no plugin (path_provider) is needed.
+File _pendingTakenFile() =>
+    File('${Directory.systemTemp.path}/pending_supplement_taken.txt');
+
 /// Background isolate handler for notification actions tapped while the app is
-/// backgrounded or killed. Must be a top-level/static function annotated for
-/// AOT entry. Only "mark taken" needs to do work here; "snooze" launches the
-/// app and is handled in the foreground.
+/// backgrounded or killed. Runs in the plugin's separate FlutterEngine, which
+/// has NO native plugins registered — so it must not touch sqflite. It records
+/// "taken" to a plain file (dart:io only); the main isolate drains it into the
+/// database on next launch/resume via [NotificationService.drainPendingTaken].
 @pragma('vm:entry-point')
 void supplementNotificationBackgroundHandler(NotificationResponse response) {
   if (response.actionId != kSupplementMarkTakenAction) return;
   final payload = decodeSupplementPayload(response.payload);
   if (payload == null) return;
-  // ensureInitialized() registers plugins (incl. sqflite) for this isolate.
-  WidgetsFlutterBinding.ensureInitialized();
-  // Idempotent: supplement_logs is keyed by (supplement_id, date).
-  WorkoutDatabase.instance.markSupplementTaken(payload.id, _todayDate());
+  try {
+    _pendingTakenFile().writeAsStringSync(
+      '${formatPendingTakenLine(payload.id, _todayDate())}\n',
+      mode: FileMode.append,
+      flush: true,
+    );
+  } catch (_) {}
 }
 
 class NotificationService {
@@ -104,6 +118,25 @@ class NotificationService {
     }
   }
 
+  /// Applies any "taken" actions captured by the background handler while the
+  /// app was backgrounded/killed. Call on launch and on resume. Idempotent —
+  /// `supplement_logs` is keyed by (supplement_id, date). Bumps the refresh
+  /// signal if anything was applied so an open Supplements screen updates.
+  Future<void> drainPendingTaken() async {
+    try {
+      final file = _pendingTakenFile();
+      if (!await file.exists()) return;
+      final contents = await file.readAsString();
+      await file.delete();
+      final pending = parsePendingTaken(contents);
+      if (pending.isEmpty) return;
+      for (final p in pending) {
+        await WorkoutDatabase.instance.markSupplementTaken(p.id, p.date);
+      }
+      notifySupplementsChanged();
+    } catch (_) {}
+  }
+
   /// Requests the POST_NOTIFICATIONS permission on Android 13+.
   /// Returns true if granted (or not needed).
   Future<bool> requestPermission() async {
@@ -166,6 +199,7 @@ class NotificationService {
         channelDescription: 'Supplement reminders from Aawara',
         importance: Importance.high,
         priority: Priority.high,
+        category: AndroidNotificationCategory.reminder,
         icon: '@mipmap/ic_launcher',
         enableVibration: true,
         actions: [
@@ -191,7 +225,9 @@ class NotificationService {
       (dose != null && dose.isNotEmpty) ? '$dose · time to take it' : 'Time to take it';
 
   /// Schedules (or replaces) a daily repeating reminder for a supplement, with
-  /// "Taken" and "Snooze" action buttons.
+  /// "Taken" and "Snooze" action buttons. Prefers an exact alarm so it still
+  /// fires when the app is killed (inexact alarms are dropped/deferred by
+  /// aggressive OEMs); falls back to inexact if exact-alarm access isn't granted.
   Future<void> scheduleSupplementReminder({
     required int supplementId,
     required String name,
@@ -200,18 +236,35 @@ class NotificationService {
   }) async {
     await initialize();
     final scheduled = _nextDailyOccurrence(time);
-    await _plugin.zonedSchedule(
-      supplementNotifId(supplementId),
-      '💊 $name',
-      _supplementBody(dose),
-      scheduled,
-      _supplementDetails(),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.time,
-      payload: encodeSupplementPayload(id: supplementId, name: name, dose: dose),
-    );
+    final payload =
+        encodeSupplementPayload(id: supplementId, name: name, dose: dose);
+    try {
+      await _plugin.zonedSchedule(
+        supplementNotifId(supplementId),
+        '💊 $name',
+        _supplementBody(dose),
+        scheduled,
+        _supplementDetails(),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+        payload: payload,
+      );
+    } catch (_) {
+      await _plugin.zonedSchedule(
+        supplementNotifId(supplementId),
+        '💊 $name',
+        _supplementBody(dose),
+        scheduled,
+        _supplementDetails(),
+        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+        payload: payload,
+      );
+    }
   }
 
   /// Reschedules a one-shot supplement reminder [minutes] from now (snooze).
