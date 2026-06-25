@@ -5,7 +5,14 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- USE_EXACT_ALARM is auto-granted at install on Android 13+ (no prompt) and
+         lets reminders schedule exact, allow-while-idle alarms that fire even in
+         Doze when the app is closed. Without it, SCHEDULE_EXACT_ALARM is
+         denied-by-default on Android 14+ and scheduling falls back to inexact
+         alarms, which Samsung drops once the app is closed. SCHEDULE_EXACT_ALARM
+         is kept (capped to ≤32) for older devices. -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH"/>

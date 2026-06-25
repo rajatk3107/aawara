@@ -85,6 +85,16 @@ class NotificationService {
           supplementNotificationBackgroundHandler,
     );
     _initialized = true;
+
+    // Diagnostic: with USE_EXACT_ALARM declared this should be true on Android
+    // 13+. If false, scheduled reminders fall back to inexact and Samsung drops
+    // them when the app is closed.
+    final androidImpl = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (androidImpl != null) {
+      final canExact = await androidImpl.canScheduleExactNotifications();
+      debugPrint('[notif] exact alarms allowed: $canExact');
+    }
   }
 
   /// Foreground handler — runs while the app is alive. Mirrors the background
