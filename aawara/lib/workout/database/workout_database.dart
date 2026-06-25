@@ -7,6 +7,7 @@ import '../models/exercise.dart';
 import '../models/plateau_alert.dart';
 import '../models/progress_photo.dart';
 import '../models/supplement.dart';
+import '../models/sleep_session.dart';
 import '../models/lab_value.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
@@ -39,7 +40,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 20,
+      version: 21,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -65,7 +66,34 @@ class WorkoutDatabase {
     if (oldVersion < 18) await _migrateV18(db);
     if (oldVersion < 19) await _migrateV19(db);
     if (oldVersion < 20) await _migrateV20(db);
+    if (oldVersion < 21) await _migrateV21(db);
   }
+
+  Future<void> _migrateV21(Database db) async {
+    await db.execute(_createSleepSessionsSql);
+  }
+
+  static const _createSleepSessionsSql = '''
+    CREATE TABLE IF NOT EXISTS sleep_sessions (
+      date TEXT PRIMARY KEY,
+      start_iso TEXT,
+      end_iso TEXT,
+      total_minutes INTEGER NOT NULL DEFAULT 0,
+      asleep_minutes INTEGER NOT NULL DEFAULT 0,
+      awake_minutes INTEGER NOT NULL DEFAULT 0,
+      light_minutes INTEGER NOT NULL DEFAULT 0,
+      deep_minutes INTEGER NOT NULL DEFAULT 0,
+      rem_minutes INTEGER NOT NULL DEFAULT 0,
+      score INTEGER NOT NULL DEFAULT 0,
+      hr_avg REAL,
+      hr_min REAL,
+      spo2_avg REAL,
+      spo2_min REAL,
+      resp_avg REAL,
+      source TEXT NOT NULL DEFAULT 'health_connect',
+      stages_json TEXT
+    )
+  ''';
 
   Future<void> _migrateV20(Database db) async {
     await db.execute('''
@@ -909,6 +937,8 @@ class WorkoutDatabase {
         UNIQUE(date, type)
       )
     ''');
+
+    await db.execute(_createSleepSessionsSql);
 
     await _seedDefaultExercises(db);
     await _seedPplWeeklyPlan(db);
@@ -3766,6 +3796,28 @@ class WorkoutDatabase {
     return Map<String, dynamic>.from(rows.first);
   }
 
+  /// Sets only the sleep hours for [date], preserving energy/soreness/notes if a
+  /// row exists (used to auto-fill from Health Connect). Creates a row with
+  /// neutral energy/soreness defaults otherwise.
+  Future<void> setWellnessSleepHours(String date, double sleepHours) async {
+    final db = await database;
+    final existing = await db.query('wellness_logs',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (existing.isNotEmpty) {
+      await db.update('wellness_logs', {'sleep_hours': sleepHours},
+          where: 'date = ?', whereArgs: [date]);
+    } else {
+      await db.insert('wellness_logs', {
+        'id': const Uuid().v4(),
+        'date': date,
+        'sleep_hours': sleepHours,
+        'energy': 3,
+        'soreness': 2,
+        'notes': null,
+      });
+    }
+  }
+
   Future<List<Map<String, dynamic>>> getWellnessLogs(
       {String? fromDate, String? toDate}) async {
     final db = await database;
@@ -4586,6 +4638,33 @@ class WorkoutDatabase {
       for (final r in rows)
         (r['supplement_id'] as int): (r['taken_days'] as int),
     };
+  }
+
+  // ─── SLEEP ──────────────────────────────────────────────────────────────────
+
+  Future<void> upsertSleepSession(SleepSession s) async {
+    final db = await database;
+    await db.insert('sleep_sessions', s.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<SleepSession?> getSleepSession(String date) async {
+    final db = await database;
+    final rows = await db.query('sleep_sessions',
+        where: 'date = ?', whereArgs: [date], limit: 1);
+    if (rows.isEmpty) return null;
+    return SleepSession.fromMap(rows.first);
+  }
+
+  /// Sessions in [fromDate, toDate] (inclusive), oldest first.
+  Future<List<SleepSession>> getSleepSessions(
+      String fromDate, String toDate) async {
+    final db = await database;
+    final rows = await db.query('sleep_sessions',
+        where: 'date >= ? AND date <= ?',
+        whereArgs: [fromDate, toDate],
+        orderBy: 'date ASC');
+    return rows.map(SleepSession.fromMap).toList();
   }
 
   // ─── LAB VALUES ─────────────────────────────────────────────────────────────

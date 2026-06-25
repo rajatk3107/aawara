@@ -19,6 +19,8 @@ import '../../utils/safe_navigation.dart';
 import '../../app_refresh.dart';
 import '../widgets/workout_heatmap.dart';
 import '../widgets/step_counter_card.dart';
+import '../widgets/sleep_card.dart';
+import 'sleep_screen.dart';
 import 'body_measurements_screen.dart';
 import 'supplements_screen.dart';
 import 'lab_values_screen.dart';
@@ -525,6 +527,10 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
                         child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                             child: StepCounterCard(date: _dateStr))),
+                    const SliverToBoxAdapter(
+                        child: Padding(
+                            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: SleepCard())),
                     if (_showWellnessCard)
                       SliverToBoxAdapter(
                           child: Padding(
@@ -1605,6 +1611,11 @@ class _WorkoutHomeScreenState extends State<WorkoutHomeScreen>
             context,
             MaterialPageRoute(
                 builder: (_) => const OneRepMaxCalculatorScreen()));
+      }),
+      _NavItem(Icons.bedtime_rounded, 'Sleep', 'Stages & vitals',
+          const Color(0xFFB39DFF), () {
+        Navigator.push(context,
+            MaterialPageRoute(builder: (_) => const SleepScreen()));
       }),
     ];
 
