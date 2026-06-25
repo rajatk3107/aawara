@@ -166,13 +166,17 @@ class SleepService {
       }
 
       final total = end.difference(start).inMinutes;
-      // Clamp asleep to the session, then derive awake as the remainder of the
-      // night — matching how Samsung accounts for the full in-bed time. Health
-      // Connect stage segments leave gaps the explicit awake records don't cover.
-      if (total > 0 && asleep > total) asleep = total;
-      final awake = total > 0
-          ? (total - asleep).clamp(0, total)
-          : totals.awakeMinutes;
+      // Reconcile to the full in-bed session. HC's awake detection is reliable,
+      // but its graded stage segments leave gaps (it doesn't classify every
+      // minute). Samsung counts those in-session gaps as sleep, so:
+      //   asleep = in-bed − awake,  light = asleep − deep − rem.
+      final deep = totals.deepMinutes;
+      final rem = totals.remMinutes;
+      if (total > 0) {
+        asleep = (total - totals.awakeMinutes).clamp(deep + rem, total);
+      }
+      final awake = total > 0 ? total - asleep : totals.awakeMinutes;
+      final light = (asleep - deep - rem).clamp(0, asleep);
       final vitals = _vitalsIn(points, start, end);
 
       // Sleep latency = the awake gap before the first actual sleep stage.
@@ -191,8 +195,8 @@ class SleepService {
 
       final score = computeSleepScore(
         actualSleepMinutes: asleep.toDouble(),
-        deepSleepMinutes: totals.deepMinutes.toDouble(),
-        remSleepMinutes: totals.remMinutes.toDouble(),
+        deepSleepMinutes: deep.toDouble(),
+        remSleepMinutes: rem.toDouble(),
         awakeMinutes: awake.toDouble(),
         latencyMinutes: latency,
         bedtime: start,
@@ -203,8 +207,8 @@ class SleepService {
       // Diagnostic: the derived inputs behind each night's score, so app vs
       // Samsung discrepancies can be traced to a specific input.
       debugPrint('[sleep] ${_dateStr(day)} score=$score | '
-          'actual=$asleep deep=${totals.deepMinutes} rem=${totals.remMinutes} '
-          'awake=$awake latency=$latency inBed=$total '
+          'actual=$asleep deep=$deep rem=$rem light=$light awake=$awake '
+          'latency=$latency inBed=$total '
           'bedtimeOffset=${start.hour * 60 + start.minute - 21 * 60} '
           'hr=$avgHr spo2Dip=${spo2Dip.toStringAsFixed(1)}');
 
@@ -224,8 +228,8 @@ class SleepService {
         totalMinutes: total <= 0 ? asleep : total,
         asleepMinutes: asleep,
         awakeMinutes: awake,
-        lightMinutes: totals.lightMinutes,
-        deepMinutes: totals.deepMinutes,
+        lightMinutes: light,
+        deepMinutes: deep,
         remMinutes: totals.remMinutes,
         score: score,
         hrAvg: vitals.hrAvg,
