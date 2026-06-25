@@ -13,6 +13,15 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.1',
+    date: 'June 2026',
+    changes: [
+      'Sleep score is calculated with a new logic that is more accurate. It now factors in duration, deep, REM, light and awake time, plus SpO₂ and resting heart rate.',
+      'More accurate sleep stage durations — fills gaps Health Connect leaves between stages',
+      "What's New no longer pops up on launch; open it anytime from Settings → What's New",
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.0',
     date: 'June 2026',
     changes: [

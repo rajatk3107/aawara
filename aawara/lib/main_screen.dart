@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'app_refresh.dart';
-import 'changelog.dart';
-import 'whats_new_screen.dart';
 import 'services/notification_service.dart';
 import 'services/supplement_events.dart';
 import 'workout/screens/workout_home_screen.dart';
@@ -56,22 +53,8 @@ class _MainScreenState extends State<MainScreen>
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _handleSnoozeRequest());
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowWhatsNew());
-  }
-
-  // Shows the What's New page once after the app updates to a new version.
-  Future<void> _maybeShowWhatsNew() async {
-    if (kChangelog.isEmpty) return;
-    final latest = kChangelog.first.version;
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getString('whatsnew_seen_version') == latest) return;
-    await prefs.setString('whatsnew_seen_version', latest);
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-          builder: (_) => const WhatsNewScreen(isUpdate: true)),
-    );
+    // Note: What's New is intentionally NOT shown automatically on update — it's
+    // available on demand via Settings → What's New.
   }
 
   Future<void> _handleSnoozeRequest() async {
