@@ -38,33 +38,36 @@ void main() {
     });
   });
 
-  group('calibrateSleepScore', () {
-    // Paired (ours, Samsung) scores from 7 real nights used to fit the mapping.
-    const pairs = [
-      (91, 85),
-      (85, 79),
-      (96, 91),
-      (95, 91),
-      (92, 88),
-      (85, 71), // outlier: Samsung penalized this night for reasons HC can't see
-      (77, 79),
+  group('sleep score vs Samsung (end-to-end)', () {
+    // Full stage data + Samsung score for 4 nights (22–25 Jun 2026), the data
+    // the model + calibration were fit to.
+    // (asleep, deep, rem, awake, timeInBed, samsungScore)
+    const nights = [
+      (445, 72, 144, 38, 483, 91), // 22 Jun
+      (418, 68, 108, 37, 455, 88), // 23 Jun
+      (339, 69, 106, 31, 370, 71), // 24 Jun
+      (383, 31, 108, 58, 441, 79), // 25 Jun
     ];
 
-    test('lands close to Samsung on the calibration nights', () {
-      var totalErr = 0;
-      var maxErr = 0;
-      for (final (ours, samsung) in pairs) {
-        final err = (calibrateSleepScore(ours) - samsung).abs();
-        totalErr += err;
+    int ourScore((int, int, int, int, int, int) n) =>
+        calibrateSleepScore(computeSleepScore(
+            asleep: n.$1, deep: n.$2, rem: n.$3, awake: n.$4, total: n.$5));
+
+    test('matches Samsung within a few points on the fitted nights', () {
+      var total = 0, maxErr = 0;
+      for (final n in nights) {
+        final err = (ourScore(n) - n.$6).abs();
+        total += err;
         if (err > maxErr) maxErr = err;
       }
-      final mae = totalErr / pairs.length;
-      expect(mae, lessThan(4)); // good average fit
-      expect(maxErr, lessThanOrEqualTo(10)); // 24 Jun is the known outlier
+      expect(total / nights.length, lessThan(2.5)); // mean abs error
+      expect(maxErr, lessThanOrEqualTo(4));
     });
+  });
 
-    test('stays within 0..100 and maps 0 to 0', () {
-      expect(calibrateSleepScore(0), 0);
+  group('calibrateSleepScore basics', () {
+    test('maps an empty night to 0', () => expect(calibrateSleepScore(0), 0));
+    test('stays within 0..100', () {
       expect(calibrateSleepScore(100), lessThanOrEqualTo(100));
       expect(calibrateSleepScore(100), greaterThan(0));
     });
@@ -116,7 +119,7 @@ void main() {
     });
 
     test('penalizes low blood oxygen', () {
-      expect(vitalsPenalty(spo2Avg: 90, restingHr: 52), 10); // (95-90)*2
+      expect(vitalsPenalty(spo2Avg: 90, restingHr: 52), 5); // (92-90)*2.5
     });
 
     test('caps the blood-oxygen penalty for very low SpO2', () {
@@ -124,7 +127,7 @@ void main() {
     });
 
     test('penalizes an elevated resting heart rate', () {
-      expect(vitalsPenalty(spo2Avg: 96, restingHr: 70), 6); // (70-58)*0.5
+      expect(vitalsPenalty(spo2Avg: 96, restingHr: 70), 4); // (70-62)*0.5
     });
 
     test('combines penalties but caps the total', () {

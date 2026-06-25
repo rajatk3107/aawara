@@ -38,7 +38,7 @@ class SleepService {
 
   // Bump the suffix to force a one-time 30-day re-backfill (e.g. after the score
   // formula/calibration changes) so cached nights are recomputed.
-  static const _backfillFlag = 'sleep_backfilled_v4';
+  static const _backfillFlag = 'sleep_backfilled_v5';
 
   static Future<Health> _configuredHealth() async {
     if (!_configured) {

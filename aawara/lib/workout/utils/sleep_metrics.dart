@@ -34,11 +34,6 @@ class SleepStageTotals {
   int get asleepMinutes => remMinutes + lightMinutes + deepMinutes;
 }
 
-// Healthy adult stage proportions (fraction of time asleep). Full marks when a
-// stage lands inside its range; points fall off as it strays above or below.
-const _deepRange = (low: 0.14, high: 0.24);
-const _remRange = (low: 0.20, high: 0.25);
-
 /// 1.0 when [value] is within [low, high], falling linearly to 0 as it moves
 /// [falloff] beyond either bound (default: the [low] bound's width).
 double rangeFactor(double value, double low, double high, {double? falloff}) {
@@ -49,11 +44,20 @@ double rangeFactor(double value, double low, double high, {double? falloff}) {
   return (1 - dist / f).clamp(0.0, 1.0);
 }
 
-/// Our own transparent 0–100 sleep score (Samsung's score is not in Health
-/// Connect). Components: duration (50), deep within healthy range (20), REM
-/// within healthy range (20), efficiency / low-awake (10). Stage components use
-/// a range — too little OR too much of a stage cuts the score. Returns 0 for an
-/// empty night.
+double _clamp01(double v) => v.clamp(0.0, 1.0);
+
+/// Our own transparent 0–100 raw sleep score, then mapped to Samsung's scale by
+/// [calibrateSleepScore]. Weighted across five factors, with actual sleep
+/// duration dominant (Samsung's score tracks it strongly):
+///
+///  * Duration (60): actual sleep time, 3h→0 … 7.5h→full.
+///  * Deep (12): proportion of sleep in the 13–18% healthy band.
+///  * REM (13): absolute REM minutes, 50→0 … 110+→full.
+///  * Light (5): proportion of sleep in the 45–60% band.
+///  * Efficiency (10): asleep ÷ time-in-bed, 75%→0 … 92%→full.
+///
+/// [asleep] is light+deep+rem; [total] is time in bed. Returns 0 for an empty
+/// night.
 int computeSleepScore({
   required int asleep,
   required int deep,
@@ -63,45 +67,52 @@ int computeSleepScore({
 }) {
   if (asleep <= 0 || total <= 0) return 0;
 
-  double cap(double v) => v > 1.0 ? 1.0 : v;
+  final light = (asleep - deep - rem).clamp(0, asleep);
+  final deepP = deep / asleep;
+  final remMin = rem.toDouble();
+  final lightP = light / asleep;
+  final efficiency = asleep / total;
 
-  final duration = 50 * cap(asleep / 450); // ~7.5h target
-  final deepScore =
-      20 * rangeFactor(deep / asleep, _deepRange.low, _deepRange.high);
-  final remScore =
-      20 * rangeFactor(rem / asleep, _remRange.low, _remRange.high);
-  final efficiency = 10 * cap(asleep / total);
+  final durationScore = 60 * _clamp01((asleep - 180) / 270); // 3h..7.5h
+  final deepScore = 12 * rangeFactor(deepP, 0.13, 0.18);
+  final remScore = 13 * _clamp01((remMin - 50) / 60); // 50..110 min
+  final lightScore = 5 * rangeFactor(lightP, 0.45, 0.60, falloff: 0.25);
+  final efficiencyScore = 10 * _clamp01((efficiency - 0.75) / 0.17);
 
-  final score = (duration + deepScore + remScore + efficiency).round();
-  return score.clamp(0, 100);
+  final raw = durationScore +
+      deepScore +
+      remScore +
+      lightScore +
+      efficiencyScore;
+  return raw.round().clamp(0, 100);
 }
 
-/// Maps our raw score onto Samsung Health's scale. Fit by least-squares to 7
-/// nights of paired (ours, Samsung) scores — our formula consistently ran a few
-/// points hot, so this scales it down and shifts it. Approximate: Samsung also
-/// uses signals Health Connect doesn't expose (movement, snoring, regularity),
-/// so unusual nights can still differ by several points.
+/// Maps our raw score onto Samsung Health's scale. Fit by least-squares to four
+/// nights of full stage data paired with their Samsung scores (22–25 Jun 2026).
+/// Approximate: Samsung also uses signals Health Connect doesn't expose (sleep
+/// latency, movement, snoring, regularity), so unusual nights can still differ
+/// by a few points. Re-fit as more paired nights become available.
 int calibrateSleepScore(int rawScore) {
   if (rawScore <= 0) return 0;
-  const slope = 0.863;
-  const intercept = 6.9;
+  const slope = 0.690;
+  const intercept = 23.6;
   return (slope * rawScore + intercept).round().clamp(0, 100);
 }
 
 /// Points to subtract from a night's score for poor overnight vitals. Gentle
-/// and penalty-only (good vitals never raise the score), so it leaves the
-/// Samsung-calibrated stage score untouched on a normal night and only docks
-/// points when blood oxygen dips or the resting heart rate runs high.
+/// and penalty-only (good vitals never raise the score), and only triggers on
+/// genuinely abnormal values so it doesn't fight the Samsung calibration on a
+/// normal night.
 ///
 /// [restingHr] is the minimum heart rate during sleep — the resting HR while
 /// asleep. Thresholds are heuristic, not clinical.
 int vitalsPenalty({double? spo2Avg, double? restingHr}) {
   var penalty = 0.0;
-  if (spo2Avg != null && spo2Avg < 95) {
-    penalty += ((95 - spo2Avg) * 2).clamp(0, 15); // up to -15
+  if (spo2Avg != null && spo2Avg < 92) {
+    penalty += ((92 - spo2Avg) * 2.5).clamp(0, 15); // up to -15
   }
-  if (restingHr != null && restingHr > 58) {
-    penalty += ((restingHr - 58) * 0.5).clamp(0, 10); // up to -10
+  if (restingHr != null && restingHr > 62) {
+    penalty += ((restingHr - 62) * 0.5).clamp(0, 10); // up to -10
   }
   return penalty.clamp(0, 20).round();
 }

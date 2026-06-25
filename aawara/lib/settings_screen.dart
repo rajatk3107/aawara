@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'privacy_policy_screen.dart';
+import 'whats_new_screen.dart';
 import 'services/notification_service.dart';
 import 'services/step_tracking_service.dart';
 import 'workout/database/workout_database.dart';
@@ -370,6 +371,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context,
                   MaterialPageRoute(
                       builder: (_) => const PrivacyPolicyScreen())),
+            ),
+            _divider(),
+            _tile(
+              icon: Icons.auto_awesome_rounded,
+              iconColor: const Color(0xFFFFD700),
+              title: "What's New",
+              onTap: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const WhatsNewScreen())),
             ),
             _divider(),
             _tile(
