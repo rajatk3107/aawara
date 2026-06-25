@@ -116,6 +116,15 @@ class SleepService {
       );
       points = health.removeDuplicates(points);
 
+      // Diagnostic: how much raw SpO₂ does Health Connect actually expose for
+      // this night, and how many readings are below 90%?
+      final allSpo2 =
+          points.where((p) => p.type == HealthDataType.BLOOD_OXYGEN).toList();
+      final below90 =
+          allSpo2.where((p) => (_num(p) ?? 100) < 90).length;
+      debugPrint('[spo2] ${_dateStr(day)} rawSpo2Count=${allSpo2.length} '
+          'below90=$below90');
+
       // Pick the main session: longest SLEEP_SESSION ending on the target day.
       final sessions = points
           .where((p) => p.type == HealthDataType.SLEEP_SESSION)
