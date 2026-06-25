@@ -36,7 +36,9 @@ class SleepService {
   static List<HealthDataAccess> get _readAll =>
       List.filled(_allTypes.length, HealthDataAccess.READ);
 
-  static const _backfillFlag = 'sleep_backfilled_v1';
+  // Bump the suffix to force a one-time 30-day re-backfill (e.g. after the score
+  // formula/calibration changes) so cached nights are recomputed.
+  static const _backfillFlag = 'sleep_backfilled_v4';
 
   static Future<Health> _configuredHealth() async {
     if (!_configured) {
@@ -161,15 +163,20 @@ class SleepService {
       }
 
       final total = end.difference(start).inMinutes;
-      final score = computeSleepScore(
+      final vitals = _vitalsIn(points, start, end);
+
+      // Stage-based score calibrated to Samsung, then docked for poor overnight
+      // blood oxygen / resting (min) heart rate.
+      final calibrated = calibrateSleepScore(computeSleepScore(
         asleep: asleep,
         deep: totals.deepMinutes,
         rem: totals.remMinutes,
         awake: totals.awakeMinutes,
         total: total <= 0 ? asleep : total,
-      );
-
-      final vitals = _vitalsIn(points, start, end);
+      ));
+      final score = (calibrated -
+              vitalsPenalty(spo2Avg: vitals.spo2Avg, restingHr: vitals.hrMin))
+          .clamp(0, 100);
 
       final stagesJson = jsonEncode([
         for (final s in totals.timeline)

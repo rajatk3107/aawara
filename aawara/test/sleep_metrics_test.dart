@@ -38,6 +38,100 @@ void main() {
     });
   });
 
+  group('calibrateSleepScore', () {
+    // Paired (ours, Samsung) scores from 7 real nights used to fit the mapping.
+    const pairs = [
+      (91, 85),
+      (85, 79),
+      (96, 91),
+      (95, 91),
+      (92, 88),
+      (85, 71), // outlier: Samsung penalized this night for reasons HC can't see
+      (77, 79),
+    ];
+
+    test('lands close to Samsung on the calibration nights', () {
+      var totalErr = 0;
+      var maxErr = 0;
+      for (final (ours, samsung) in pairs) {
+        final err = (calibrateSleepScore(ours) - samsung).abs();
+        totalErr += err;
+        if (err > maxErr) maxErr = err;
+      }
+      final mae = totalErr / pairs.length;
+      expect(mae, lessThan(4)); // good average fit
+      expect(maxErr, lessThanOrEqualTo(10)); // 24 Jun is the known outlier
+    });
+
+    test('stays within 0..100 and maps 0 to 0', () {
+      expect(calibrateSleepScore(0), 0);
+      expect(calibrateSleepScore(100), lessThanOrEqualTo(100));
+      expect(calibrateSleepScore(100), greaterThan(0));
+    });
+  });
+
+  group('rangeFactor', () {
+    test('full marks inside the range', () {
+      expect(rangeFactor(0.18, 0.14, 0.24), 1.0);
+      expect(rangeFactor(0.14, 0.14, 0.24), 1.0); // inclusive low
+      expect(rangeFactor(0.24, 0.14, 0.24), 1.0); // inclusive high
+    });
+
+    test('cuts proportionally below the range', () {
+      // 0.07 is half the falloff (0.14) below the low bound -> 0.5
+      expect(rangeFactor(0.07, 0.14, 0.24, falloff: 0.14), closeTo(0.5, 0.001));
+      expect(rangeFactor(0.0, 0.14, 0.24, falloff: 0.14), 0.0);
+    });
+
+    test('cuts proportionally above the range', () {
+      // 0.31 is 0.07 above the high bound, falloff 0.14 -> 0.5
+      expect(rangeFactor(0.31, 0.14, 0.24, falloff: 0.14), closeTo(0.5, 0.001));
+    });
+
+    test('never goes negative', () {
+      expect(rangeFactor(0.6, 0.14, 0.24, falloff: 0.14), 0.0);
+    });
+  });
+
+  group('computeSleepScore range behaviour', () {
+    test('in-range deep+REM beats out-of-range with the same duration', () {
+      final inRange = computeSleepScore(
+          asleep: 450, deep: 81, rem: 99, awake: 30, total: 480); // 18%, 22%
+      final tooLittle = computeSleepScore(
+          asleep: 450, deep: 9, rem: 9, awake: 30, total: 480); // 2%, 2%
+      final tooMuch = computeSleepScore(
+          asleep: 450, deep: 225, rem: 225, awake: 30, total: 480); // 50%, 50%
+      expect(inRange, greaterThan(tooLittle));
+      expect(inRange, greaterThan(tooMuch));
+    });
+  });
+
+  group('vitalsPenalty', () {
+    test('no penalty when vitals are missing', () {
+      expect(vitalsPenalty(spo2Avg: null, restingHr: null), 0);
+    });
+
+    test('no penalty for healthy vitals', () {
+      expect(vitalsPenalty(spo2Avg: 96, restingHr: 52), 0);
+    });
+
+    test('penalizes low blood oxygen', () {
+      expect(vitalsPenalty(spo2Avg: 90, restingHr: 52), 10); // (95-90)*2
+    });
+
+    test('caps the blood-oxygen penalty for very low SpO2', () {
+      expect(vitalsPenalty(spo2Avg: 80, restingHr: 52), 15); // capped
+    });
+
+    test('penalizes an elevated resting heart rate', () {
+      expect(vitalsPenalty(spo2Avg: 96, restingHr: 70), 6); // (70-58)*0.5
+    });
+
+    test('combines penalties but caps the total', () {
+      expect(vitalsPenalty(spo2Avg: 85, restingHr: 90), 20); // capped at 20
+    });
+  });
+
   group('aggregateStages', () {
     DateTime t(int h, int m) => DateTime(2026, 6, 24, h, m);
 

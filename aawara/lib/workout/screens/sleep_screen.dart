@@ -57,6 +57,13 @@ class _SleepScreenState extends State<SleepScreen> {
   Future<void> _init() async {
     _hasPermission = await SleepService.hasPermission();
     await _loadFromDb();
+    if (_hasPermission) {
+      // Recompute cached nights (picks up score/calibration changes via the
+      // bumped backfill flag), then refresh the list.
+      SleepService.syncHistory().then((_) {
+        if (mounted) _loadFromDb();
+      });
+    }
     // Refresh the visible night from Health Connect in the background.
     _syncCurrent();
   }
@@ -115,8 +122,8 @@ class _SleepScreenState extends State<SleepScreen> {
       date: _ds(_date),
       totalMinutes: mins,
       asleepMinutes: mins,
-      score: computeSleepScore(
-          asleep: mins, deep: 0, rem: 0, awake: 0, total: mins),
+      score: calibrateSleepScore(computeSleepScore(
+          asleep: mins, deep: 0, rem: 0, awake: 0, total: mins)),
       source: 'manual',
     );
     await _db.upsertSleepSession(session);
@@ -540,7 +547,8 @@ class _SleepScreenState extends State<SleepScreen> {
   Widget _vitalsCard(SleepSession s) {
     final items = <Widget>[];
     if (s.hrAvg != null) {
-      items.add(_vital('Heart rate', '${s.hrAvg!.round()}', 'avg bpm',
+      final rest = s.hrMin != null ? ' · ${s.hrMin!.round()} rest' : '';
+      items.add(_vital('Heart rate', '${s.hrAvg!.round()}', 'avg bpm$rest',
           Icons.favorite_rounded, const Color(0xFFE74C3C)));
     }
     if (s.spo2Avg != null) {
