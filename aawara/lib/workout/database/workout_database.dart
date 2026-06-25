@@ -40,7 +40,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 21,
+      version: 22,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -67,10 +67,20 @@ class WorkoutDatabase {
     if (oldVersion < 19) await _migrateV19(db);
     if (oldVersion < 20) await _migrateV20(db);
     if (oldVersion < 21) await _migrateV21(db);
+    if (oldVersion < 22) await _migrateV22(db);
   }
 
   Future<void> _migrateV21(Database db) async {
     await db.execute(_createSleepSessionsSql);
+  }
+
+  Future<void> _migrateV22(Database db) async {
+    // Per-timestamp HR / SpO₂ samples for the overnight charts.
+    for (final col in ['hr_series_json', 'spo2_series_json']) {
+      try {
+        await db.execute('ALTER TABLE sleep_sessions ADD COLUMN $col TEXT');
+      } catch (_) {}
+    }
   }
 
   static const _createSleepSessionsSql = '''
@@ -91,7 +101,9 @@ class WorkoutDatabase {
       spo2_min REAL,
       resp_avg REAL,
       source TEXT NOT NULL DEFAULT 'health_connect',
-      stages_json TEXT
+      stages_json TEXT,
+      hr_series_json TEXT,
+      spo2_series_json TEXT
     )
   ''';
 

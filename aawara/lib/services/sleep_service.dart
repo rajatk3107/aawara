@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../workout/database/workout_database.dart';
 import '../workout/models/sleep_session.dart';
 import '../workout/utils/sleep_metrics.dart';
+import '../workout/utils/sleep_series.dart';
 
 /// Reads sleep (sessions + stages) and associated vitals from Health Connect,
 /// computes a score, and caches a [SleepSession] per night. Mirrors the
@@ -38,7 +39,7 @@ class SleepService {
 
   // Bump the suffix to force a one-time 30-day re-backfill (e.g. after the score
   // formula/calibration changes) so cached nights are recomputed.
-  static const _backfillFlag = 'sleep_backfilled_v8';
+  static const _backfillFlag = 'sleep_backfilled_v9';
 
   static Future<Health> _configuredHealth() async {
     if (!_configured) {
@@ -210,7 +211,9 @@ class SleepService {
           'actual=$asleep deep=$deep rem=$rem light=$light awake=$awake '
           'latency=$latency inBed=$total '
           'bedtimeOffset=${start.hour * 60 + start.minute - 21 * 60} '
-          'hr=$avgHr spo2Dip=${spo2Dip.toStringAsFixed(1)}');
+          'hr=$avgHr spo2Dip=${spo2Dip.toStringAsFixed(1)} '
+          'hrPts=${vitals.hrSeries.length} spo2Pts=${vitals.spo2Series.length} '
+          'spo2Avg=${vitals.spo2Avg?.toStringAsFixed(0)}');
 
       final stagesJson = jsonEncode([
         for (final s in totals.timeline)
@@ -239,6 +242,12 @@ class SleepService {
         respAvg: vitals.respAvg,
         source: 'health_connect',
         stagesJson: totals.timeline.isEmpty ? null : stagesJson,
+        hrSeriesJson: vitals.hrSeries.isEmpty
+            ? null
+            : encodeSeries(downsampleSeries(vitals.hrSeries, 240)),
+        spo2SeriesJson: vitals.spo2Series.isEmpty
+            ? null
+            : encodeSeries(downsampleSeries(vitals.spo2Series, 240)),
       );
 
       await WorkoutDatabase.instance.upsertSleepSession(session);
@@ -274,6 +283,8 @@ class SleepService {
     final hr = <double>[];
     final spo2 = <double>[];
     final resp = <double>[];
+    final hrPts = <SeriesPoint>[];
+    final spo2Pts = <SeriesPoint>[];
     for (final p in points) {
       if (p.dateFrom.isBefore(start) || p.dateTo.isAfter(end)) continue;
       final v = _num(p);
@@ -281,14 +292,18 @@ class SleepService {
       switch (p.type) {
         case HealthDataType.HEART_RATE:
           hr.add(v);
+          hrPts.add(SeriesPoint(p.dateFrom, v));
         case HealthDataType.BLOOD_OXYGEN:
           spo2.add(v);
+          spo2Pts.add(SeriesPoint(p.dateFrom, v));
         case HealthDataType.RESPIRATORY_RATE:
           resp.add(v);
         default:
           break;
       }
     }
+    hrPts.sort((a, b) => a.t.compareTo(b.t));
+    spo2Pts.sort((a, b) => a.t.compareTo(b.t));
     double? avg(List<double> xs) =>
         xs.isEmpty ? null : xs.reduce((a, b) => a + b) / xs.length;
     double? lo(List<double> xs) =>
@@ -304,6 +319,8 @@ class SleepService {
       spo2Min: lo(spo2),
       respAvg: avg(resp),
       spo2DipFraction: dipFraction,
+      hrSeries: hrPts,
+      spo2Series: spo2Pts,
     );
   }
 }
@@ -311,6 +328,8 @@ class SleepService {
 class _Vitals {
   final double? hrAvg, hrMin, spo2Avg, spo2Min, respAvg;
   final double spo2DipFraction;
+  final List<SeriesPoint> hrSeries;
+  final List<SeriesPoint> spo2Series;
   const _Vitals({
     this.hrAvg,
     this.hrMin,
@@ -318,5 +337,7 @@ class _Vitals {
     this.spo2Min,
     this.respAvg,
     this.spo2DipFraction = 0.0,
+    this.hrSeries = const [],
+    this.spo2Series = const [],
   });
 }

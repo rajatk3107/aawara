@@ -7,6 +7,8 @@ import '../../services/sleep_service.dart';
 import '../database/workout_database.dart';
 import '../models/sleep_session.dart';
 import '../utils/sleep_metrics.dart';
+import '../utils/sleep_series.dart';
+import '../widgets/sleep_charts.dart';
 
 const _bg = Color(0xFF0D0D1A);
 const _card = Color(0xFF1A1A2E);
@@ -18,13 +20,6 @@ const _awakeColor = Color(0xFFE84393);
 const _remColor = Color(0xFFB39DFF);
 const _lightColor = Color(0xFF7C6FF0);
 const _deepColor = Color(0xFF4834D4);
-
-Color _stageColor(SleepStage s) => switch (s) {
-      SleepStage.awake => _awakeColor,
-      SleepStage.rem => _remColor,
-      SleepStage.light => _lightColor,
-      SleepStage.deep => _deepColor,
-    };
 
 class SleepScreen extends StatefulWidget {
   const SleepScreen({super.key});
@@ -230,6 +225,23 @@ class _SleepScreenState extends State<SleepScreen> {
                     _stageBreakdown(_session!),
                     const SizedBox(height: 16),
                   ],
+                  ..._chartCard(
+                    'HEART RATE',
+                    decodeSeries(_session!.hrSeriesJson),
+                    const Color(0xFFE74C3C),
+                    average: _session!.hrAvg,
+                    unit: '',
+                  ),
+                  ..._chartCard(
+                    'BLOOD OXYGEN',
+                    decodeSeries(_session!.spo2SeriesJson),
+                    const Color(0xFF3498DB),
+                    average: _session!.spo2Avg,
+                    minY: 80,
+                    maxY: 100,
+                    referenceY: 90,
+                    unit: '%',
+                  ),
                   if (_hasVitals(_session!)) ...[
                     _vitalsCard(_session!),
                     const SizedBox(height: 16),
@@ -484,19 +496,65 @@ class _SleepScreenState extends State<SleepScreen> {
                   fontWeight: FontWeight.w700,
                   letterSpacing: 1.2)),
           const SizedBox(height: 12),
-          SizedBox(
-            height: 120,
-            width: double.infinity,
-            child: CustomPaint(painter: _HypnogramPainter(segments)),
-          ),
+          SleepHypnogram(segments: segments),
         ],
       ),
     );
   }
 
+  /// A titled chart card for an HR/SpO₂ series. Returns [] (and no spacing) when
+  /// the series is empty, so the layout collapses gracefully.
+  List<Widget> _chartCard(
+    String title,
+    List<SeriesPoint> points,
+    Color color, {
+    double? average,
+    double? minY,
+    double? maxY,
+    double? referenceY,
+    String unit = '',
+  }) {
+    if (points.length < 2) return const [];
+    return [
+      Container(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+        decoration: BoxDecoration(
+          color: _card,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _border),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: const TextStyle(
+                    color: _muted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 12),
+            SleepLineChart(
+              points: points,
+              color: color,
+              average: average,
+              minY: minY,
+              maxY: maxY,
+              referenceY: referenceY,
+              unit: unit,
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 16),
+    ];
+  }
+
   Widget _stageBreakdown(SleepSession s) {
     final asleep = s.asleepMinutes == 0 ? 1 : s.asleepMinutes;
-    Widget row(String label, int minutes, Color color, {int? ofTotal}) {
+    // Healthy typical ranges (fraction of the relevant total) for the markers.
+    Widget row(String label, int minutes, Color color, double rangeLow,
+        double rangeHigh,
+        {int? ofTotal}) {
       final denom = ofTotal ?? asleep;
       final pct = denom == 0 ? 0.0 : minutes / denom;
       return Padding(
@@ -523,14 +581,11 @@ class _SleepScreenState extends State<SleepScreen> {
               ],
             ),
             const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(3),
-              child: LinearProgressIndicator(
-                value: pct.clamp(0.0, 1.0),
-                minHeight: 5,
-                backgroundColor: _bg,
-                valueColor: AlwaysStoppedAnimation(color),
-              ),
+            StageBar(
+              value: pct,
+              rangeLow: rangeLow,
+              rangeHigh: rangeHigh,
+              color: color,
             ),
           ],
         ),
@@ -547,10 +602,27 @@ class _SleepScreenState extends State<SleepScreen> {
       ),
       child: Column(
         children: [
-          row('Awake', s.awakeMinutes, _awakeColor, ofTotal: total),
-          row('REM', s.remMinutes, _remColor),
-          row('Light', s.lightMinutes, _lightColor),
-          row('Deep', s.deepMinutes, _deepColor),
+          row('Awake', s.awakeMinutes, _awakeColor, 0.05, 0.15, ofTotal: total),
+          row('REM', s.remMinutes, _remColor, 0.20, 0.25),
+          row('Light', s.lightMinutes, _lightColor, 0.45, 0.55),
+          row('Deep', s.deepMinutes, _deepColor, 0.13, 0.23),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Container(
+                width: 14,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A45),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 6),
+              const Text('Typical range',
+                  style: TextStyle(color: _muted, fontSize: 11)),
+            ],
+          ),
         ],
       ),
     );
@@ -669,51 +741,4 @@ class _SleepScreenState extends State<SleepScreen> {
 
   String _weekday(DateTime d) =>
       const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][d.weekday - 1];
-}
-
-class _HypnogramPainter extends CustomPainter {
-  final List<SleepStageSegment> segments;
-  _HypnogramPainter(this.segments);
-
-  // Higher row = lighter stage. Awake at top, Deep at bottom.
-  static const _rowOf = {
-    SleepStage.awake: 0,
-    SleepStage.rem: 1,
-    SleepStage.light: 2,
-    SleepStage.deep: 3,
-  };
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (segments.isEmpty) return;
-    final start = segments.first.start;
-    final end = segments.last.end;
-    final totalMs = end.difference(start).inMilliseconds;
-    if (totalMs <= 0) return;
-
-    const rows = 4;
-    final rowH = size.height / rows;
-    final barH = rowH * 0.55;
-
-    double x(DateTime t) =>
-        size.width * (t.difference(start).inMilliseconds / totalMs);
-
-    final paint = Paint()..style = PaintingStyle.fill;
-    for (final seg in segments) {
-      final row = _rowOf[seg.stage]!;
-      final left = x(seg.start);
-      final right = x(seg.end);
-      final top = row * rowH + (rowH - barH) / 2;
-      paint.color = _stageColor(seg.stage);
-      final rect = RRect.fromRectAndRadius(
-        Rect.fromLTRB(left, top, right < left + 1 ? left + 1 : right, top + barH),
-        const Radius.circular(2),
-      );
-      canvas.drawRRect(rect, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _HypnogramPainter old) =>
-      old.segments != segments;
 }

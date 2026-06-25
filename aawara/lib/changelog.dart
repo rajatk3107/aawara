@@ -13,6 +13,15 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.2',
+    date: 'June 2026',
+    changes: [
+      'Sleep screen now shows a sleep-stages graph with time on the x-axis',
+      'New overnight heart-rate and blood-oxygen line charts (with average and 90% marker)',
+      'Stage breakdown now shows the typical healthy range for each stage',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.1',
     date: 'June 2026',
     changes: [

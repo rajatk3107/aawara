@@ -18,6 +18,8 @@ class SleepSession {
   final double? respAvg;
   final String source; // 'health_connect' | 'manual'
   final String? stagesJson; // ordered [{stage,start,end}] for the hypnogram
+  final String? hrSeriesJson; // [{t,v}] heart-rate samples over the night
+  final String? spo2SeriesJson; // [{t,v}] SpO₂ samples over the night
 
   const SleepSession({
     required this.date,
@@ -37,6 +39,8 @@ class SleepSession {
     this.respAvg,
     this.source = 'health_connect',
     this.stagesJson,
+    this.hrSeriesJson,
+    this.spo2SeriesJson,
   });
 
   bool get hasStages =>
@@ -60,6 +64,8 @@ class SleepSession {
         'resp_avg': respAvg,
         'source': source,
         'stages_json': stagesJson,
+        'hr_series_json': hrSeriesJson,
+        'spo2_series_json': spo2SeriesJson,
       };
 
   factory SleepSession.fromMap(Map<String, dynamic> m) => SleepSession(
@@ -80,5 +86,7 @@ class SleepSession {
         respAvg: (m['resp_avg'] as num?)?.toDouble(),
         source: (m['source'] as String?) ?? 'health_connect',
         stagesJson: m['stages_json'] as String?,
+        hrSeriesJson: m['hr_series_json'] as String?,
+        spo2SeriesJson: m['spo2_series_json'] as String?,
       );
 }
