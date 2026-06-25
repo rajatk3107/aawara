@@ -38,7 +38,7 @@ class SleepService {
 
   // Bump the suffix to force a one-time 30-day re-backfill (e.g. after the score
   // formula/calibration changes) so cached nights are recomputed.
-  static const _backfillFlag = 'sleep_backfilled_v5';
+  static const _backfillFlag = 'sleep_backfilled_v6';
 
   static Future<Health> _configuredHealth() async {
     if (!_configured) {
@@ -165,18 +165,26 @@ class SleepService {
       final total = end.difference(start).inMinutes;
       final vitals = _vitalsIn(points, start, end);
 
-      // Stage-based score calibrated to Samsung, then docked for poor overnight
-      // blood oxygen / resting (min) heart rate.
-      final calibrated = calibrateSleepScore(computeSleepScore(
-        asleep: asleep,
-        deep: totals.deepMinutes,
-        rem: totals.remMinutes,
-        awake: totals.awakeMinutes,
-        total: total <= 0 ? asleep : total,
-      ));
-      final score = (calibrated -
-              vitalsPenalty(spo2Avg: vitals.spo2Avg, restingHr: vitals.hrMin))
-          .clamp(0, 100);
+      // Sleep latency = time from getting into bed (session start) to the first
+      // actual sleep stage (leading awake segments).
+      final firstSleep = totals.timeline
+          .where((s) => s.stage != SleepStage.awake)
+          .fold<DateTime?>(null, (e, s) => e == null || s.start.isBefore(e) ? s.start : e);
+      final latency = firstSleep != null
+          ? firstSleep.difference(start).inMinutes.clamp(0, 120).toDouble()
+          : 12.0; // unknown → neutral/optimal
+      final spo2Dip = vitals.spo2DipFraction * asleep;
+
+      final score = computeSleepScore(
+        actualSleepMinutes: asleep.toDouble(),
+        deepSleepMinutes: totals.deepMinutes.toDouble(),
+        remSleepMinutes: totals.remMinutes.toDouble(),
+        awakeMinutes: totals.awakeMinutes.toDouble(),
+        latencyMinutes: latency,
+        bedtime: start,
+        avgHrBpm: vitals.hrAvg?.round() ?? 60, // neutral default
+        spo2DipMinutes: spo2Dip,
+      );
 
       final stagesJson = jsonEncode([
         for (final s in totals.timeline)
@@ -259,23 +267,30 @@ class SleepService {
         xs.isEmpty ? null : xs.reduce((a, b) => a + b) / xs.length;
     double? lo(List<double> xs) =>
         xs.isEmpty ? null : xs.reduce((a, b) => a < b ? a : b);
+    // Fraction of SpO₂ samples below 90% — multiplied by sleep minutes to
+    // estimate dip duration (HC samples are instantaneous, so this approximates).
+    final dipFraction =
+        spo2.isEmpty ? 0.0 : spo2.where((v) => v < 90).length / spo2.length;
     return _Vitals(
       hrAvg: avg(hr),
       hrMin: lo(hr),
       spo2Avg: avg(spo2),
       spo2Min: lo(spo2),
       respAvg: avg(resp),
+      spo2DipFraction: dipFraction,
     );
   }
 }
 
 class _Vitals {
   final double? hrAvg, hrMin, spo2Avg, spo2Min, respAvg;
+  final double spo2DipFraction;
   const _Vitals({
     this.hrAvg,
     this.hrMin,
     this.spo2Avg,
     this.spo2Min,
     this.respAvg,
+    this.spo2DipFraction = 0.0,
   });
 }

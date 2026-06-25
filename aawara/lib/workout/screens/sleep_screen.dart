@@ -118,12 +118,24 @@ class _SleepScreenState extends State<SleepScreen> {
     final hours = await _askHours();
     if (hours == null) return;
     final mins = (hours * 60).round();
+    // Manual entry only has total hours — estimate typical stage proportions and
+    // assume neutral/optimal values for the factors we can't know, so the score
+    // is essentially duration-driven.
+    final score = computeSleepScore(
+      actualSleepMinutes: mins.toDouble(),
+      deepSleepMinutes: mins * 0.15,
+      remSleepMinutes: mins * 0.22,
+      awakeMinutes: 20,
+      latencyMinutes: 12,
+      bedtime: DateTime(_date.year, _date.month, _date.day - 1, 22, 30),
+      avgHrBpm: 60,
+      spo2DipMinutes: 0,
+    );
     final session = SleepSession(
       date: _ds(_date),
       totalMinutes: mins,
       asleepMinutes: mins,
-      score: calibrateSleepScore(computeSleepScore(
-          asleep: mins, deep: 0, rem: 0, awake: 0, total: mins)),
+      score: score,
       source: 'manual',
     );
     await _db.upsertSleepSession(session);
@@ -393,9 +405,9 @@ class _SleepScreenState extends State<SleepScreen> {
                   ),
                 ],
               ),
-              const Text('SLEEP SCORE',
+              Text('SLEEP SCORE · ${sleepScoreLabel(s.score).toUpperCase()}',
                   style: TextStyle(
-                      color: _muted,
+                      color: scoreColor,
                       fontSize: 10,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.2)),

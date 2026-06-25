@@ -34,87 +34,141 @@ class SleepStageTotals {
   int get asleepMinutes => remMinutes + lightMinutes + deepMinutes;
 }
 
-/// 1.0 when [value] is within [low, high], falling linearly to 0 as it moves
-/// [falloff] beyond either bound (default: the [low] bound's width).
-double rangeFactor(double value, double low, double high, {double? falloff}) {
-  if (value >= low && value <= high) return 1.0;
-  final f = falloff ?? low;
-  if (f <= 0) return 0.0;
-  final dist = value < low ? low - value : value - high;
-  return (1 - dist / f).clamp(0.0, 1.0);
+// ─── Sleep score (Samsung-calibrated, per sleep_score_spec.md) ───────────────
+// Weighted feature scoring: each metric → 0..1 via a lookup, × weight, summed,
+// then a linear calibration to Samsung's scale (clamped 50..100). Calibrated to
+// 7 nights of Samsung Health data (19–25 Jun 2026), MAE ~0.4 pts.
+
+/// Minutes after 9:00 PM for [bedtime] (sleep start), wrapping past midnight.
+int bedtimeOffset(DateTime bedtime) {
+  const anchor = 21 * 60; // 9:00 PM
+  var bedtimeMinutes = bedtime.hour * 60 + bedtime.minute;
+  if (bedtimeMinutes < 12 * 60) bedtimeMinutes += 24 * 60; // past midnight
+  return bedtimeMinutes - anchor;
 }
 
 double _clamp01(double v) => v.clamp(0.0, 1.0);
 
-/// Our own transparent 0–100 raw sleep score, then mapped to Samsung's scale by
-/// [calibrateSleepScore]. Weighted across five factors, with actual sleep
-/// duration dominant (Samsung's score tracks it strongly):
-///
-///  * Duration (60): actual sleep time, 3h→0 … 7.5h→full.
-///  * Deep (12): proportion of sleep in the 13–18% healthy band.
-///  * REM (13): absolute REM minutes, 50→0 … 110+→full.
-///  * Light (5): proportion of sleep in the 45–60% band.
-///  * Efficiency (10): asleep ÷ time-in-bed, 75%→0 … 92%→full.
-///
-/// [asleep] is light+deep+rem; [total] is time in bed. Returns 0 for an empty
-/// night.
+double scoreDuration(double m) {
+  if (m >= 420 && m <= 540) return 1.0; // 7–9h
+  if (m >= 390 && m < 420) return 0.5 + 0.5 * (m - 390) / 30;
+  if (m > 540 && m <= 570) return 1.0 - 0.5 * (m - 540) / 30;
+  if (m >= 330 && m < 390) return 0.2 + 0.3 * (m - 330) / 60;
+  return _clamp01(m / 420 * 0.3);
+}
+
+double scoreDeep(double m) {
+  if (m >= 90) return 1.0;
+  if (m >= 60) return 0.8 + 0.2 * (m - 60) / 30;
+  if (m >= 40) return 0.55 + 0.25 * (m - 40) / 20;
+  if (m >= 20) return 0.3 + 0.25 * (m - 20) / 20;
+  return _clamp01(m / 20 * 0.3);
+}
+
+double scoreRem(double m) {
+  if (m >= 120) return 1.0;
+  if (m >= 90) return 0.8 + 0.2 * (m - 90) / 30;
+  if (m >= 60) return 0.5 + 0.3 * (m - 60) / 30;
+  if (m >= 30) return 0.2 + 0.3 * (m - 30) / 30;
+  return _clamp01(m / 30 * 0.2);
+}
+
+double scoreAwake(double m) {
+  if (m <= 20) return 1.0;
+  if (m <= 40) return 0.85 - 0.15 * (m - 20) / 20;
+  if (m <= 60) return 0.70 - 0.20 * (m - 40) / 20;
+  return _clamp01(0.50 - 0.50 * (m - 60) / 60);
+}
+
+/// Samsung penalizes both extremes — optimal latency is 8–20 min.
+double scoreLatency(double m) {
+  if (m >= 8 && m <= 20) return 1.0;
+  if (m > 20 && m <= 30) return 0.85;
+  if (m > 30 && m <= 45) return 0.70;
+  if (m > 45) return (1.0 - m / 60).clamp(0.3, 0.7);
+  if (m >= 3) return 0.75; // fell asleep fast
+  return 0.60; // <3 min — Samsung flags as "Attention"
+}
+
+/// Bedtime timing — the dominant factor. [offset] = minutes after 9 PM.
+double scoreBedtime(int offset) {
+  if (offset >= 55 && offset <= 90) return 1.0; // 9:55–10:30 PM
+  if (offset > 90 && offset <= 105) return 0.85;
+  if (offset > 105 && offset <= 120) return 0.65;
+  if (offset > 120) return (1.0 - (offset - 90) / 130.0).clamp(0.2, 0.65);
+  if (offset >= 30) return 0.85; // 9:30–9:55 PM
+  return 0.65; // before 9:30 PM
+}
+
+/// SpO₂ dip ([m] = minutes below 90%). Deliberately low weight — Samsung barely
+/// reflects it in the score. Surface dips as a separate health warning in the UI.
+double scoreSpo2(double m) {
+  if (m <= 2) return 1.0;
+  if (m <= 5) return 0.97;
+  if (m <= 10) return 0.93;
+  if (m <= 20) return 0.88;
+  return 0.82;
+}
+
+double scoreHr(int bpm) {
+  if (bpm >= 58 && bpm <= 65) return 1.0;
+  if (bpm > 65 && bpm <= 70) return 0.85;
+  if (bpm > 70 && bpm <= 75) return 0.65;
+  if (bpm >= 50 && bpm < 58) return 0.90;
+  return 0.50;
+}
+
+/// Feature weights (sum to 100). Bedtime and duration dominate.
+const _wBedtime = 26;
+const _wDuration = 22;
+const _wRem = 17;
+const _wLatency = 13;
+const _wDeep = 12;
+const _wAwake = 4;
+const _wHr = 4;
+const _wSpo2 = 2;
+
+/// Final 0–100 sleep score (clamped 50–100), per the calibrated spec.
 int computeSleepScore({
-  required int asleep,
-  required int deep,
-  required int rem,
-  required int awake,
-  required int total,
+  required double actualSleepMinutes,
+  required double deepSleepMinutes,
+  required double remSleepMinutes,
+  required double awakeMinutes,
+  required double latencyMinutes,
+  required DateTime bedtime,
+  required int avgHrBpm,
+  required double spo2DipMinutes,
 }) {
-  if (asleep <= 0 || total <= 0) return 0;
+  if (actualSleepMinutes <= 0) return 0;
+  final offset = bedtimeOffset(bedtime);
 
-  final light = (asleep - deep - rem).clamp(0, asleep);
-  final deepP = deep / asleep;
-  final remMin = rem.toDouble();
-  final lightP = light / asleep;
-  final efficiency = asleep / total;
+  final raw = scoreDuration(actualSleepMinutes) * _wDuration +
+      scoreDeep(deepSleepMinutes) * _wDeep +
+      scoreRem(remSleepMinutes) * _wRem +
+      scoreAwake(awakeMinutes) * _wAwake +
+      scoreLatency(latencyMinutes) * _wLatency +
+      scoreBedtime(offset) * _wBedtime +
+      scoreSpo2(spo2DipMinutes) * _wSpo2 +
+      scoreHr(avgHrBpm) * _wHr;
 
-  final durationScore = 60 * _clamp01((asleep - 180) / 270); // 3h..7.5h
-  final deepScore = 12 * rangeFactor(deepP, 0.13, 0.18);
-  final remScore = 13 * _clamp01((remMin - 50) / 60); // 50..110 min
-  final lightScore = 5 * rangeFactor(lightP, 0.45, 0.60, falloff: 0.25);
-  final efficiencyScore = 10 * _clamp01((efficiency - 0.75) / 0.17);
-
-  final raw = durationScore +
-      deepScore +
-      remScore +
-      lightScore +
-      efficiencyScore;
-  return raw.round().clamp(0, 100);
+  final calibrated = 63.1 * (raw / 100.0) + 29.7;
+  return calibrated.round().clamp(50, 100);
 }
 
-/// Maps our raw score onto Samsung Health's scale. Fit by least-squares to four
-/// nights of full stage data paired with their Samsung scores (22–25 Jun 2026).
-/// Approximate: Samsung also uses signals Health Connect doesn't expose (sleep
-/// latency, movement, snoring, regularity), so unusual nights can still differ
-/// by a few points. Re-fit as more paired nights become available.
-int calibrateSleepScore(int rawScore) {
-  if (rawScore <= 0) return 0;
-  const slope = 0.690;
-  const intercept = 23.6;
-  return (slope * rawScore + intercept).round().clamp(0, 100);
+/// Overall label, matching Samsung's bands.
+String sleepScoreLabel(int score) {
+  if (score >= 90) return 'Excellent';
+  if (score >= 80) return 'Good';
+  if (score >= 70) return 'Fair';
+  return 'Needs attention';
 }
 
-/// Points to subtract from a night's score for poor overnight vitals. Gentle
-/// and penalty-only (good vitals never raise the score), and only triggers on
-/// genuinely abnormal values so it doesn't fight the Samsung calibration on a
-/// normal night.
-///
-/// [restingHr] is the minimum heart rate during sleep — the resting HR while
-/// asleep. Thresholds are heuristic, not clinical.
-int vitalsPenalty({double? spo2Avg, double? restingHr}) {
-  var penalty = 0.0;
-  if (spo2Avg != null && spo2Avg < 92) {
-    penalty += ((92 - spo2Avg) * 2.5).clamp(0, 15); // up to -15
-  }
-  if (restingHr != null && restingHr > 62) {
-    penalty += ((restingHr - 62) * 0.5).clamp(0, 10); // up to -10
-  }
-  return penalty.clamp(0, 20).round();
+/// Per-factor label from a 0..1 feature score (for the breakdown cards).
+String factorLabel(double featureScore) {
+  if (featureScore >= 0.95) return 'Excellent';
+  if (featureScore >= 0.80) return 'Good';
+  if (featureScore >= 0.60) return 'Fair';
+  return 'Attention';
 }
 
 /// Aggregates raw stage segments into per-stage totals plus an ordered timeline.

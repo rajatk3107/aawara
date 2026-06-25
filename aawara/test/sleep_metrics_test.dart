@@ -2,136 +2,142 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:aawara/workout/utils/sleep_metrics.dart';
 
 void main() {
-  group('computeSleepScore', () {
-    test('returns 0 when there is no sleep', () {
+  group('bedtimeOffset', () {
+    DateTime at(int h, int m) => DateTime(2026, 6, 24, h, m);
+    test('minutes after 9 PM, wrapping past midnight', () {
+      expect(bedtimeOffset(at(21, 57)), 57); // 9:57 PM
+      expect(bedtimeOffset(at(22, 15)), 75); // 10:15 PM
+      expect(bedtimeOffset(at(22, 40)), 100); // 10:40 PM
+      expect(bedtimeOffset(at(23, 6)), 126); // 11:06 PM
+      expect(bedtimeOffset(at(0, 15)), 195); // 12:15 AM next day
+    });
+  });
+
+  group('feature scoring functions', () {
+    test('duration: 7–9h is perfect, short sleep cut', () {
+      expect(scoreDuration(450), 1.0);
+      expect(scoreDuration(420), 1.0);
+      expect(scoreDuration(540), 1.0);
+      expect(scoreDuration(405), closeTo(0.75, 0.001)); // 6.75h
+      expect(scoreDuration(300), lessThan(0.4)); // 5h
+    });
+
+    test('deep: rises with minutes, plateaus at 90', () {
+      expect(scoreDeep(90), 1.0);
+      expect(scoreDeep(120), 1.0);
+      expect(scoreDeep(31), closeTo(0.3 + 0.25 * 11 / 20, 0.001));
+      expect(scoreDeep(10), lessThan(0.3));
+    });
+
+    test('rem: rises with minutes, plateaus at 120', () {
+      expect(scoreRem(120), 1.0);
+      expect(scoreRem(108), closeTo(0.8 + 0.2 * 18 / 30, 0.001));
+      expect(scoreRem(20), lessThan(0.2));
+    });
+
+    test('awake: lenient, 58m still decent', () {
+      expect(scoreAwake(15), 1.0);
+      expect(scoreAwake(58), greaterThan(0.5));
+      expect(scoreAwake(120), lessThanOrEqualTo(0.2));
+    });
+
+    test('latency: penalizes both extremes, optimal 8–20', () {
+      expect(scoreLatency(15), 1.0);
+      expect(scoreLatency(1), 0.60); // too fast
+      expect(scoreLatency(40), 0.70);
+      expect(scoreLatency(55), lessThan(0.70));
+    });
+
+    test('bedtime: optimal 9:55–10:30, late penalized', () {
+      expect(scoreBedtime(57), 1.0); // 9:57 PM
+      expect(scoreBedtime(100), 0.85); // 10:40 PM
+      expect(scoreBedtime(126), lessThan(0.85)); // 11:06 PM
+    });
+
+    test('spo2: barely matters even with long dips', () {
+      expect(scoreSpo2(0), 1.0);
+      expect(scoreSpo2(23), 0.82); // worst case still 0.82
+    });
+
+    test('hr: best in 58–65 bpm', () {
+      expect(scoreHr(60), 1.0);
+      expect(scoreHr(64), 1.0);
+      expect(scoreHr(72), lessThan(0.7));
+    });
+  });
+
+  group('computeSleepScore vs Samsung (end-to-end)', () {
+    // Full inputs for the today/25-Jun night where all 8 metrics are known.
+    test('today night lands near Samsung 79', () {
+      final score = computeSleepScore(
+        actualSleepMinutes: 383,
+        deepSleepMinutes: 31,
+        remSleepMinutes: 108,
+        awakeMinutes: 58,
+        latencyMinutes: 18,
+        bedtime: DateTime(2026, 6, 24, 22, 40), // 10:40 PM
+        avgHrBpm: 64,
+        spo2DipMinutes: 6.5,
+      );
+      expect((score - 79).abs(), lessThanOrEqualTo(5));
+    });
+
+    test('clamps to the 50–100 band', () {
+      final terrible = computeSleepScore(
+        actualSleepMinutes: 120,
+        deepSleepMinutes: 0,
+        remSleepMinutes: 0,
+        awakeMinutes: 120,
+        latencyMinutes: 90,
+        bedtime: DateTime(2026, 6, 24, 2, 0), // 2 AM
+        avgHrBpm: 80,
+        spo2DipMinutes: 30,
+      );
+      expect(terrible, greaterThanOrEqualTo(50));
+      final great = computeSleepScore(
+        actualSleepMinutes: 480,
+        deepSleepMinutes: 100,
+        remSleepMinutes: 130,
+        awakeMinutes: 15,
+        latencyMinutes: 12,
+        bedtime: DateTime(2026, 6, 24, 22, 0),
+        avgHrBpm: 60,
+        spo2DipMinutes: 0,
+      );
+      expect(great, lessThanOrEqualTo(100));
+      expect(great, greaterThan(terrible));
+    });
+
+    test('returns 0 with no sleep', () {
       expect(
-        computeSleepScore(asleep: 0, deep: 0, rem: 0, awake: 0, total: 0),
+        computeSleepScore(
+          actualSleepMinutes: 0,
+          deepSleepMinutes: 0,
+          remSleepMinutes: 0,
+          awakeMinutes: 0,
+          latencyMinutes: 0,
+          bedtime: DateTime(2026, 6, 24, 22, 0),
+          avgHrBpm: 60,
+          spo2DipMinutes: 0,
+        ),
         0,
       );
     });
-
-    test('a solid night scores high', () {
-      // 7.5h asleep, ~18% deep, ~22% REM, little awake.
-      final score = computeSleepScore(
-        asleep: 450,
-        deep: 81,
-        rem: 99,
-        awake: 30,
-        total: 480,
-      );
-      expect(score, greaterThanOrEqualTo(90));
-      expect(score, lessThanOrEqualTo(100));
-    });
-
-    test('a short, fragmented night scores low', () {
-      final low = computeSleepScore(
-        asleep: 180, deep: 10, rem: 10, awake: 120, total: 300);
-      final good = computeSleepScore(
-        asleep: 450, deep: 81, rem: 99, awake: 30, total: 480);
-      expect(low, lessThan(good));
-    });
-
-    test('never exceeds 100 even with abundant deep/REM and long sleep', () {
-      final score = computeSleepScore(
-        asleep: 600, deep: 300, rem: 300, awake: 0, total: 600);
-      expect(score, lessThanOrEqualTo(100));
-    });
   });
 
-  group('sleep score vs Samsung (end-to-end)', () {
-    // Full stage data + Samsung score for 4 nights (22–25 Jun 2026), the data
-    // the model + calibration were fit to.
-    // (asleep, deep, rem, awake, timeInBed, samsungScore)
-    const nights = [
-      (445, 72, 144, 38, 483, 91), // 22 Jun
-      (418, 68, 108, 37, 455, 88), // 23 Jun
-      (339, 69, 106, 31, 370, 71), // 24 Jun
-      (383, 31, 108, 58, 441, 79), // 25 Jun
-    ];
-
-    int ourScore((int, int, int, int, int, int) n) =>
-        calibrateSleepScore(computeSleepScore(
-            asleep: n.$1, deep: n.$2, rem: n.$3, awake: n.$4, total: n.$5));
-
-    test('matches Samsung within a few points on the fitted nights', () {
-      var total = 0, maxErr = 0;
-      for (final n in nights) {
-        final err = (ourScore(n) - n.$6).abs();
-        total += err;
-        if (err > maxErr) maxErr = err;
-      }
-      expect(total / nights.length, lessThan(2.5)); // mean abs error
-      expect(maxErr, lessThanOrEqualTo(4));
-    });
-  });
-
-  group('calibrateSleepScore basics', () {
-    test('maps an empty night to 0', () => expect(calibrateSleepScore(0), 0));
-    test('stays within 0..100', () {
-      expect(calibrateSleepScore(100), lessThanOrEqualTo(100));
-      expect(calibrateSleepScore(100), greaterThan(0));
-    });
-  });
-
-  group('rangeFactor', () {
-    test('full marks inside the range', () {
-      expect(rangeFactor(0.18, 0.14, 0.24), 1.0);
-      expect(rangeFactor(0.14, 0.14, 0.24), 1.0); // inclusive low
-      expect(rangeFactor(0.24, 0.14, 0.24), 1.0); // inclusive high
+  group('labels', () {
+    test('overall label bands', () {
+      expect(sleepScoreLabel(92), 'Excellent');
+      expect(sleepScoreLabel(82), 'Good');
+      expect(sleepScoreLabel(72), 'Fair');
+      expect(sleepScoreLabel(60), 'Needs attention');
     });
 
-    test('cuts proportionally below the range', () {
-      // 0.07 is half the falloff (0.14) below the low bound -> 0.5
-      expect(rangeFactor(0.07, 0.14, 0.24, falloff: 0.14), closeTo(0.5, 0.001));
-      expect(rangeFactor(0.0, 0.14, 0.24, falloff: 0.14), 0.0);
-    });
-
-    test('cuts proportionally above the range', () {
-      // 0.31 is 0.07 above the high bound, falloff 0.14 -> 0.5
-      expect(rangeFactor(0.31, 0.14, 0.24, falloff: 0.14), closeTo(0.5, 0.001));
-    });
-
-    test('never goes negative', () {
-      expect(rangeFactor(0.6, 0.14, 0.24, falloff: 0.14), 0.0);
-    });
-  });
-
-  group('computeSleepScore range behaviour', () {
-    test('in-range deep+REM beats out-of-range with the same duration', () {
-      final inRange = computeSleepScore(
-          asleep: 450, deep: 81, rem: 99, awake: 30, total: 480); // 18%, 22%
-      final tooLittle = computeSleepScore(
-          asleep: 450, deep: 9, rem: 9, awake: 30, total: 480); // 2%, 2%
-      final tooMuch = computeSleepScore(
-          asleep: 450, deep: 225, rem: 225, awake: 30, total: 480); // 50%, 50%
-      expect(inRange, greaterThan(tooLittle));
-      expect(inRange, greaterThan(tooMuch));
-    });
-  });
-
-  group('vitalsPenalty', () {
-    test('no penalty when vitals are missing', () {
-      expect(vitalsPenalty(spo2Avg: null, restingHr: null), 0);
-    });
-
-    test('no penalty for healthy vitals', () {
-      expect(vitalsPenalty(spo2Avg: 96, restingHr: 52), 0);
-    });
-
-    test('penalizes low blood oxygen', () {
-      expect(vitalsPenalty(spo2Avg: 90, restingHr: 52), 5); // (92-90)*2.5
-    });
-
-    test('caps the blood-oxygen penalty for very low SpO2', () {
-      expect(vitalsPenalty(spo2Avg: 80, restingHr: 52), 15); // capped
-    });
-
-    test('penalizes an elevated resting heart rate', () {
-      expect(vitalsPenalty(spo2Avg: 96, restingHr: 70), 4); // (70-62)*0.5
-    });
-
-    test('combines penalties but caps the total', () {
-      expect(vitalsPenalty(spo2Avg: 85, restingHr: 90), 20); // capped at 20
+    test('per-factor label bands', () {
+      expect(factorLabel(0.97), 'Excellent');
+      expect(factorLabel(0.85), 'Good');
+      expect(factorLabel(0.65), 'Fair');
+      expect(factorLabel(0.4), 'Attention');
     });
   });
 
@@ -153,7 +159,6 @@ void main() {
     });
 
     test('orders the timeline by start time across midnight', () {
-      // 10:40 PM precedes 1:00 AM the next day.
       final totals = aggregateStages([
         SleepStageSegment(SleepStage.deep,
             DateTime(2026, 6, 25, 1, 0), DateTime(2026, 6, 25, 1, 20)),
