@@ -38,7 +38,7 @@ class SleepService {
 
   // Bump the suffix to force a one-time 30-day re-backfill (e.g. after the score
   // formula/calibration changes) so cached nights are recomputed.
-  static const _backfillFlag = 'sleep_backfilled_v6';
+  static const _backfillFlag = 'sleep_backfilled_v8';
 
   static Future<Health> _configuredHealth() async {
     if (!_configured) {
@@ -83,6 +83,9 @@ class SleepService {
         HealthDataType.SLEEP_DEEP => SleepStage.deep,
         HealthDataType.SLEEP_LIGHT => SleepStage.light,
         HealthDataType.SLEEP_REM => SleepStage.rem,
+        // Generic "asleep, stage unknown" periods fill the gaps between graded
+        // stages; count them as light so actual-sleep matches Samsung's total.
+        HealthDataType.SLEEP_ASLEEP => SleepStage.light,
         HealthDataType.SLEEP_AWAKE => SleepStage.awake,
         HealthDataType.SLEEP_AWAKE_IN_BED => SleepStage.awake,
         _ => null,
@@ -163,28 +166,47 @@ class SleepService {
       }
 
       final total = end.difference(start).inMinutes;
+      // Clamp asleep to the session, then derive awake as the remainder of the
+      // night — matching how Samsung accounts for the full in-bed time. Health
+      // Connect stage segments leave gaps the explicit awake records don't cover.
+      if (total > 0 && asleep > total) asleep = total;
+      final awake = total > 0
+          ? (total - asleep).clamp(0, total)
+          : totals.awakeMinutes;
       final vitals = _vitalsIn(points, start, end);
 
-      // Sleep latency = time from getting into bed (session start) to the first
-      // actual sleep stage (leading awake segments).
+      // Sleep latency = the awake gap before the first actual sleep stage.
+      // Health Connect frequently doesn't record the pre-sleep awake period, so
+      // a 0/near-0 gap means "unknown", NOT "fell asleep instantly" — treat it as
+      // neutral (optimal) rather than penalizing it.
       final firstSleep = totals.timeline
           .where((s) => s.stage != SleepStage.awake)
           .fold<DateTime?>(null, (e, s) => e == null || s.start.isBefore(e) ? s.start : e);
-      final latency = firstSleep != null
-          ? firstSleep.difference(start).inMinutes.clamp(0, 120).toDouble()
-          : 12.0; // unknown → neutral/optimal
+      final leadingAwake =
+          firstSleep != null ? firstSleep.difference(start).inMinutes : 0;
+      final latency =
+          leadingAwake >= 3 ? leadingAwake.clamp(0, 120).toDouble() : 12.0;
       final spo2Dip = vitals.spo2DipFraction * asleep;
+      final avgHr = vitals.hrAvg?.round() ?? 60;
 
       final score = computeSleepScore(
         actualSleepMinutes: asleep.toDouble(),
         deepSleepMinutes: totals.deepMinutes.toDouble(),
         remSleepMinutes: totals.remMinutes.toDouble(),
-        awakeMinutes: totals.awakeMinutes.toDouble(),
+        awakeMinutes: awake.toDouble(),
         latencyMinutes: latency,
         bedtime: start,
-        avgHrBpm: vitals.hrAvg?.round() ?? 60, // neutral default
+        avgHrBpm: avgHr,
         spo2DipMinutes: spo2Dip,
       );
+
+      // Diagnostic: the derived inputs behind each night's score, so app vs
+      // Samsung discrepancies can be traced to a specific input.
+      debugPrint('[sleep] ${_dateStr(day)} score=$score | '
+          'actual=$asleep deep=${totals.deepMinutes} rem=${totals.remMinutes} '
+          'awake=$awake latency=$latency inBed=$total '
+          'bedtimeOffset=${start.hour * 60 + start.minute - 21 * 60} '
+          'hr=$avgHr spo2Dip=${spo2Dip.toStringAsFixed(1)}');
 
       final stagesJson = jsonEncode([
         for (final s in totals.timeline)
@@ -201,7 +223,7 @@ class SleepService {
         endIso: end.toIso8601String(),
         totalMinutes: total <= 0 ? asleep : total,
         asleepMinutes: asleep,
-        awakeMinutes: totals.awakeMinutes,
+        awakeMinutes: awake,
         lightMinutes: totals.lightMinutes,
         deepMinutes: totals.deepMinutes,
         remMinutes: totals.remMinutes,
