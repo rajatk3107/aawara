@@ -30,6 +30,7 @@ enum _DataCategory {
   bodyMeasurements,
   water,
   wellness,
+  sleep,
   achievements,
   stepLogs,
   customFoods,
@@ -51,6 +52,7 @@ const Map<_DataCategory, _CatInfo> _catInfo = {
   _DataCategory.bodyMeasurements: (emoji: '📏', label: 'Body Measurements', desc: 'Waist, chest, arms, thighs & all other dimensions'),
   _DataCategory.water: (emoji: '💧', label: 'Water Intake', desc: 'Daily hydration logs'),
   _DataCategory.wellness: (emoji: '🌙', label: 'Wellness', desc: 'Sleep hours, energy & soreness levels'),
+  _DataCategory.sleep: (emoji: '😴', label: 'Sleep', desc: 'Nightly sleep score, stages & vitals from Health Connect'),
   _DataCategory.achievements: (emoji: '🎖️', label: 'Achievements', desc: 'Unlocked badges & milestones'),
   _DataCategory.stepLogs: (emoji: '👟', label: 'Step Logs', desc: 'Daily step count & goals'),
   _DataCategory.customFoods: (emoji: '🥦', label: 'Custom Foods', desc: 'Foods you created manually'),
@@ -71,6 +73,7 @@ const _jsonExportCats = [
   _DataCategory.bodyMeasurements,
   _DataCategory.water,
   _DataCategory.wellness,
+  _DataCategory.sleep,
   _DataCategory.stepLogs,
 ];
 
@@ -83,6 +86,7 @@ const _aiExportCats = [
   _DataCategory.bodyMeasurements,
   _DataCategory.water,
   _DataCategory.wellness,
+  _DataCategory.sleep,
   _DataCategory.achievements,
   _DataCategory.stepLogs,
   _DataCategory.notes,
@@ -97,6 +101,7 @@ const _backupExportCats = [
   _DataCategory.bodyMeasurements,
   _DataCategory.water,
   _DataCategory.wellness,
+  _DataCategory.sleep,
   _DataCategory.achievements,
   _DataCategory.stepLogs,
   _DataCategory.customFoods,
@@ -672,6 +677,14 @@ class _ExportScreenState extends State<ExportScreen> {
           orderBy: 'date ASC');
     }
 
+    List<Map<String, dynamic>> sleepData = [];
+    if (has(_DataCategory.sleep)) {
+      sleepData = await db.query('sleep_sessions',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date ASC');
+    }
+
     List<Map<String, dynamic>> measurementData = [];
     if (has(_DataCategory.bodyMeasurements)) {
       measurementData = await db.query('body_measurements',
@@ -758,6 +771,24 @@ class _ExportScreenState extends State<ExportScreen> {
         'date': r['date'],
         'steps': r['steps'],
         'goal': r['goal'],
+      }).toList(),
+      if (sleepData.isNotEmpty) 'sleep': sleepData.map((r) => {
+        'date': r['date'],
+        'score': r['score'],
+        'total_minutes': r['total_minutes'],
+        'asleep_minutes': r['asleep_minutes'],
+        'awake_minutes': r['awake_minutes'],
+        'light_minutes': r['light_minutes'],
+        'deep_minutes': r['deep_minutes'],
+        'rem_minutes': r['rem_minutes'],
+        if (r['hr_avg'] != null) 'hr_avg': r['hr_avg'],
+        if (r['hr_min'] != null) 'hr_min': r['hr_min'],
+        if (r['spo2_avg'] != null) 'spo2_avg': r['spo2_avg'],
+        if (r['spo2_min'] != null) 'spo2_min': r['spo2_min'],
+        if (r['resp_avg'] != null) 'resp_avg': r['resp_avg'],
+        if (r['start_iso'] != null) 'start_iso': r['start_iso'],
+        if (r['end_iso'] != null) 'end_iso': r['end_iso'],
+        'source': r['source'],
       }).toList(),
       if (measurementData.isNotEmpty) 'body_measurements': measurementData.map((r) => {
         'date': r['date'],

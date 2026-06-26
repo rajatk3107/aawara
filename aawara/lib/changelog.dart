@@ -18,6 +18,7 @@ const List<ChangelogEntry> kChangelog = [
     changes: [
       'Rest timer now keeps running when you leave the workout screen and come back — it no longer disappears',
       'Rest countdown stays accurate across app backgrounding (anchored to real time, not screen ticks)',
+      'Sleep data (score, stages & vitals) is now included in exports, AI export and full backup/restore',
     ],
   ),
   ChangelogEntry(

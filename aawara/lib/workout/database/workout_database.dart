@@ -3038,6 +3038,36 @@ class WorkoutDatabase {
       }
     }
 
+    // ── Sleep ─────────────────────────────────────────────────────────────────
+    if (hasCat('sleep')) {
+      final sleep = await db.query('sleep_sessions',
+          where: 'date >= ? AND date <= ?',
+          whereArgs: [from, to],
+          orderBy: 'date DESC');
+      if (sleep.isNotEmpty) {
+        sb.writeln('## Sleep');
+        final avgScore = sleep.fold(0, (s, r) => s + (r['score'] as int)) / sleep.length;
+        final avgAsleep = sleep.fold(0, (s, r) => s + (r['asleep_minutes'] as int)) / sleep.length;
+        sb.writeln('**Averages over ${sleep.length} nights:** '
+            'Score ${avgScore.round()}/100 | '
+            'Time asleep ${(avgAsleep / 60).toStringAsFixed(1)} hrs');
+        sb.writeln();
+        sb.writeln('| Date | Score | Asleep | Deep | REM | Light | Awake | HR avg | SpO₂ avg |');
+        sb.writeln('|------|-------|--------|------|-----|-------|-------|--------|----------|');
+        String hm(int m) => '${m ~/ 60}h ${m % 60}m';
+        String opt(Object? v, String unit) =>
+            v == null ? '—' : '${(v as num).toStringAsFixed(0)}$unit';
+        for (final r in sleep) {
+          sb.writeln('| ${r['date']} | ${r['score']} | '
+              '${hm(r['asleep_minutes'] as int)} | ${hm(r['deep_minutes'] as int)} | '
+              '${hm(r['rem_minutes'] as int)} | ${hm(r['light_minutes'] as int)} | '
+              '${hm(r['awake_minutes'] as int)} | ${opt(r['hr_avg'], ' bpm')} | '
+              '${opt(r['spo2_avg'], '%')} |');
+        }
+        sb.writeln();
+      }
+    }
+
     // ── Step Logs ─────────────────────────────────────────────────────────────
     if (hasCat('stepLogs')) {
       final steps = await db.query('step_logs',
@@ -3258,6 +3288,11 @@ class WorkoutDatabase {
         ? await db.query('body_measurements', orderBy: 'date ASC, type ASC')
         : <Map<String, dynamic>>[];
 
+    // Sleep sessions (full rows, incl. stage/HR/SpO₂ series for a true restore)
+    final sleepSessions = hasCat('sleep')
+        ? await db.query('sleep_sessions', orderBy: 'date ASC')
+        : <Map<String, dynamic>>[];
+
     final payload = <String, dynamic>{
       'app': 'aawara',
       'schema_version': 3,
@@ -3277,6 +3312,7 @@ class WorkoutDatabase {
       if (quickStartTemplates.isNotEmpty) 'quick_start_templates': quickStartTemplates.toList(),
       if (stepLogs.isNotEmpty) 'step_logs': stepLogs.toList(),
       if (bodyMeasurements.isNotEmpty) 'body_measurements': bodyMeasurements.toList(),
+      if (sleepSessions.isNotEmpty) 'sleep_sessions': sleepSessions.toList(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
   }
@@ -3635,6 +3671,21 @@ class WorkoutDatabase {
       imp++;
     }
     counts['quick_start_templates'] = (imported: imp, skipped: skip);
+
+    // ── Sleep sessions ───────────────────────────────────────────────────────
+    imp = 0; skip = 0;
+    final sleepSessions = (data['sleep_sessions'] as List? ?? []).cast<Map<String, dynamic>>();
+    for (final s in sleepSessions) {
+      final date = s['date'] as String? ?? '';
+      if (date.isEmpty) { skip++; continue; }
+      final existing = await db.query('sleep_sessions',
+          where: 'date = ?', whereArgs: [date], limit: 1);
+      if (existing.isNotEmpty) { skip++; continue; }
+      // Round-trip via the model so only known columns are written.
+      await db.insert('sleep_sessions', SleepSession.fromMap(s).toMap());
+      imp++;
+    }
+    counts['sleep_sessions'] = (imported: imp, skipped: skip);
 
     return counts;
   }
