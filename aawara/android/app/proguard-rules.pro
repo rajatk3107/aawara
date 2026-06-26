@@ -19,3 +19,10 @@
 # flutter_local_notifications model classes serialized via Gson
 -keep class com.dexterous.flutterlocalnotifications.** { *; }
 -keepclassmembers class com.dexterous.flutterlocalnotifications.** { *; }
+
+# ─── Samsung Health Data SDK ─────────────────────────────────────────────────
+# The SDK uses reflection/Parcelable across its data + request models; keep them
+# so R8 doesn't strip fields read over the Samsung Health IPC boundary.
+-keep class com.samsung.android.sdk.health.data.** { *; }
+-keepclassmembers class com.samsung.android.sdk.health.data.** { *; }
+-dontwarn com.samsung.android.sdk.health.data.**

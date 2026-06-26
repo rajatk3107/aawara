@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
+import '../widgets/watch_metrics_card.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
 import '../utils/rest_timer.dart';
@@ -1073,6 +1074,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
         children: [
           _buildHeader(),
           _buildProgress(checkedCount, totalSets, exWithSets, totalVol, progress),
+          WatchMetricsCard(workoutId: _log.id),
           Expanded(
             child: _log.exercises.isEmpty
                 ? _buildEmptyState()

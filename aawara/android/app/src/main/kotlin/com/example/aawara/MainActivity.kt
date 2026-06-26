@@ -8,6 +8,8 @@ import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
+    private var samsungHealth: SamsungHealthBridge? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(
@@ -19,6 +21,15 @@ class MainActivity : FlutterFragmentActivity() {
                 else -> result.notImplemented()
             }
         }
+        samsungHealth = SamsungHealthBridge(
+            this, flutterEngine.dartExecutor.binaryMessenger
+        ).also { it.register() }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        samsungHealth?.dispose()
+        samsungHealth = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun inspectHealthConnectRegistration(): Map<String, Any?> {

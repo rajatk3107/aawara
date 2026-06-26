@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'app_refresh.dart';
 import 'services/notification_service.dart';
+import 'services/samsung_health_sync.dart';
 import 'services/supplement_events.dart';
 import 'workout/screens/workout_home_screen.dart';
 import 'workout/screens/progress_screen.dart';
@@ -55,6 +56,9 @@ class _MainScreenState extends State<MainScreen>
     }
     // Note: What's New is intentionally NOT shown automatically on update — it's
     // available on demand via Settings → What's New.
+
+    // Pull Samsung Health (watch) data on open — guarded, non-blocking.
+    SamsungHealthSync.syncOnLaunch();
   }
 
   Future<void> _handleSnoozeRequest() async {

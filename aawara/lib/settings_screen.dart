@@ -10,6 +10,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'privacy_policy_screen.dart';
 import 'whats_new_screen.dart';
 import 'services/notification_service.dart';
+import 'services/samsung_health_sync.dart';
 import 'services/step_tracking_service.dart';
 import 'workout/database/workout_database.dart';
 import 'workout/models/workout_plan_day.dart';
@@ -374,6 +375,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _divider(),
             _tile(
+              icon: Icons.watch_rounded,
+              iconColor: const Color(0xFF2ECC71),
+              title: 'Sync Samsung Health',
+              trailing: _shSyncing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Color(0xFF2ECC71)))
+                  : null,
+              onTap: _shSyncing ? null : _syncSamsungHealth,
+            ),
+            _divider(),
+            _tile(
               icon: Icons.auto_awesome_rounded,
               iconColor: const Color(0xFFFFD700),
               title: "What's New",
@@ -719,6 +734,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _openBatterySettings() async {
     await openAppSettings();
+  }
+
+  bool _shSyncing = false;
+
+  Future<void> _syncSamsungHealth() async {
+    setState(() => _shSyncing = true);
+    final r = await SamsungHealthSync.syncNow();
+    if (!mounted) return;
+    setState(() => _shSyncing = false);
+    final msg = switch (r.outcome) {
+      SyncOutcome.notSamsung =>
+        'Needs a Samsung phone with Samsung Health installed',
+      SyncOutcome.notPermitted =>
+        'Not authorized — enable “Developer Mode for Data Read” in Samsung Health, then try again',
+      SyncOutcome.ok =>
+        'Synced ${r.exercises} workouts, ${r.sleep} nights · ${r.linked} linked to your logs',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(_snack(msg,
+        icon: r.outcome == SyncOutcome.ok
+            ? Icons.check_circle_rounded
+            : Icons.info_outline_rounded));
   }
 
   Future<void> _syncHealthConnect() async {

@@ -9,6 +9,7 @@ import '../models/progress_photo.dart';
 import '../models/supplement.dart';
 import '../models/sleep_session.dart';
 import '../models/lab_value.dart';
+import '../../services/samsung_health_models.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
 import '../../nutrition/models/nutrition_models.dart';
@@ -40,7 +41,7 @@ class WorkoutDatabase {
     final path = join(dbPath, filePath);
     return await openDatabase(
       path,
-      version: 22,
+      version: 23,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -68,7 +69,73 @@ class WorkoutDatabase {
     if (oldVersion < 20) await _migrateV20(db);
     if (oldVersion < 21) await _migrateV21(db);
     if (oldVersion < 22) await _migrateV22(db);
+    if (oldVersion < 23) await _migrateV23(db);
   }
+
+  Future<void> _migrateV23(Database db) async {
+    for (final sql in _createSamsungHealthSql) {
+      await db.execute(sql);
+    }
+    // Link gym workouts to watch-recorded exercise sessions + capture start time.
+    for (final col in ['started_at TEXT', 'samsung_exercise_uid TEXT']) {
+      try {
+        await db.execute('ALTER TABLE workout_logs ADD COLUMN $col');
+      } catch (_) {}
+    }
+  }
+
+  // Samsung Health (watch) data, kept separate from the manual logs. Every row
+  // keeps raw_json so later analytics can use fields we don't model yet.
+  static const _createSamsungHealthSql = <String>[
+    '''
+    CREATE TABLE IF NOT EXISTS sh_exercise_sessions (
+      uid TEXT PRIMARY KEY,
+      exercise_type TEXT,
+      custom_title TEXT,
+      start_iso TEXT NOT NULL,
+      end_iso TEXT NOT NULL,
+      duration_seconds INTEGER,
+      calories REAL,
+      distance REAL,
+      count INTEGER,
+      mean_hr REAL, max_hr REAL, min_hr REAL,
+      mean_speed REAL, max_speed REAL,
+      vo2max REAL,
+      raw_json TEXT
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_sh_ex_start ON sh_exercise_sessions(start_iso)',
+    '''
+    CREATE TABLE IF NOT EXISTS sh_exercise_samples (
+      uid TEXT NOT NULL, t_iso TEXT NOT NULL,
+      hr REAL, cadence REAL, power REAL, speed REAL
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_sh_ex_samples ON sh_exercise_samples(uid)',
+    '''
+    CREATE TABLE IF NOT EXISTS sh_exercise_route (
+      uid TEXT NOT NULL, t_iso TEXT NOT NULL, lat REAL, lng REAL, alt REAL
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_sh_ex_route ON sh_exercise_route(uid)',
+    '''
+    CREATE TABLE IF NOT EXISTS sh_sleep_sessions (
+      uid TEXT PRIMARY KEY, date TEXT, score INTEGER,
+      start_iso TEXT, end_iso TEXT, duration_seconds INTEGER, raw_json TEXT
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS sh_sleep_stages (
+      uid TEXT NOT NULL, stage TEXT, start_iso TEXT, end_iso TEXT
+    )
+    ''',
+    'CREATE INDEX IF NOT EXISTS idx_sh_sleep_stages ON sh_sleep_stages(uid)',
+    '''
+    CREATE TABLE IF NOT EXISTS sh_sync_state (
+      key TEXT PRIMARY KEY, value TEXT
+    )
+    ''',
+  ];
 
   Future<void> _migrateV21(Database db) async {
     await db.execute(_createSleepSessionsSql);
@@ -755,7 +822,9 @@ class WorkoutDatabase {
         workout_name TEXT NOT NULL,
         notes TEXT,
         completed INTEGER NOT NULL DEFAULT 0,
-        duration_seconds INTEGER
+        duration_seconds INTEGER,
+        started_at TEXT,
+        samsung_exercise_uid TEXT
       )
     ''');
 
@@ -951,6 +1020,9 @@ class WorkoutDatabase {
     ''');
 
     await db.execute(_createSleepSessionsSql);
+    for (final sql in _createSamsungHealthSql) {
+      await db.execute(sql);
+    }
 
     await _seedDefaultExercises(db);
     await _seedPplWeeklyPlan(db);
@@ -1647,7 +1719,12 @@ class WorkoutDatabase {
 
   Future<WorkoutLog> createWorkoutLog(WorkoutLog log) async {
     final db = await database;
-    await db.insert('workout_logs', log.toMap());
+    // Stamp the wall-clock start so watch (Samsung) sessions can be matched to
+    // this workout by time overlap.
+    await db.insert('workout_logs', {
+      ...log.toMap(),
+      'started_at': DateTime.now().toUtc().toIso8601String(),
+    });
     return log;
   }
 
@@ -3293,6 +3370,23 @@ class WorkoutDatabase {
         ? await db.query('sleep_sessions', orderBy: 'date ASC')
         : <Map<String, dynamic>>[];
 
+    // Samsung Health (watch) data — exported with workouts so the watch stats
+    // travel with a backup.
+    final shExercise = hasCat('workouts')
+        ? await db.query('sh_exercise_sessions', orderBy: 'start_iso ASC')
+        : <Map<String, dynamic>>[];
+    final shExSamples = hasCat('workouts')
+        ? await db.query('sh_exercise_samples')
+        : <Map<String, dynamic>>[];
+    final shExRoute = hasCat('workouts')
+        ? await db.query('sh_exercise_route')
+        : <Map<String, dynamic>>[];
+    final shSleep = hasCat('sleep')
+        ? await db.query('sh_sleep_sessions', orderBy: 'start_iso ASC')
+        : <Map<String, dynamic>>[];
+    final shSleepStages =
+        hasCat('sleep') ? await db.query('sh_sleep_stages') : <Map<String, dynamic>>[];
+
     final payload = <String, dynamic>{
       'app': 'aawara',
       'schema_version': 3,
@@ -3313,6 +3407,11 @@ class WorkoutDatabase {
       if (stepLogs.isNotEmpty) 'step_logs': stepLogs.toList(),
       if (bodyMeasurements.isNotEmpty) 'body_measurements': bodyMeasurements.toList(),
       if (sleepSessions.isNotEmpty) 'sleep_sessions': sleepSessions.toList(),
+      if (shExercise.isNotEmpty) 'sh_exercise_sessions': shExercise.toList(),
+      if (shExSamples.isNotEmpty) 'sh_exercise_samples': shExSamples.toList(),
+      if (shExRoute.isNotEmpty) 'sh_exercise_route': shExRoute.toList(),
+      if (shSleep.isNotEmpty) 'sh_sleep_sessions': shSleep.toList(),
+      if (shSleepStages.isNotEmpty) 'sh_sleep_stages': shSleepStages.toList(),
     };
     return const JsonEncoder.withIndent('  ').convert(payload);
   }
@@ -3686,6 +3785,51 @@ class WorkoutDatabase {
       imp++;
     }
     counts['sleep_sessions'] = (imported: imp, skipped: skip);
+
+    // Samsung Health (watch) data. Parents dedupe by uid; children are cleared
+    // for the imported uids then re-inserted, so re-importing is idempotent.
+    Future<void> importSamsung(String parentTable, String parentList,
+        List<({String childTable, String childList})> children) async {
+      var pi = 0, ps = 0;
+      final parents =
+          (data[parentList] as List? ?? []).cast<Map<String, dynamic>>();
+      final uids = <String>{};
+      for (final row in parents) {
+        final uid = row['uid'] as String?;
+        if (uid == null) {
+          ps++;
+          continue;
+        }
+        uids.add(uid);
+        final n = await db.insert(parentTable, Map<String, dynamic>.from(row),
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+        if (n > 0) {
+          pi++;
+        } else {
+          ps++;
+        }
+      }
+      for (final c in children) {
+        for (final uid in uids) {
+          await db.delete(c.childTable, where: 'uid = ?', whereArgs: [uid]);
+        }
+        for (final row in (data[c.childList] as List? ?? [])
+            .cast<Map<String, dynamic>>()) {
+          if (uids.contains(row['uid'])) {
+            await db.insert(c.childTable, Map<String, dynamic>.from(row));
+          }
+        }
+      }
+      counts[parentTable] = (imported: pi, skipped: ps);
+    }
+
+    await importSamsung('sh_exercise_sessions', 'sh_exercise_sessions', [
+      (childTable: 'sh_exercise_samples', childList: 'sh_exercise_samples'),
+      (childTable: 'sh_exercise_route', childList: 'sh_exercise_route'),
+    ]);
+    await importSamsung('sh_sleep_sessions', 'sh_sleep_sessions', [
+      (childTable: 'sh_sleep_stages', childList: 'sh_sleep_stages'),
+    ]);
 
     return counts;
   }
@@ -4626,6 +4770,153 @@ class WorkoutDatabase {
         whereArgs: [fromStr],
         orderBy: 'date ASC');
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  // ─── SAMSUNG HEALTH (watch) ─────────────────────────────────────────────────
+
+  Future<void> upsertSamsungExercise(SamsungExercise e) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.insert(
+        'sh_exercise_sessions',
+        {
+          'uid': e.uid,
+          'exercise_type': e.exerciseType,
+          'custom_title': e.customTitle,
+          'start_iso': e.start.toUtc().toIso8601String(),
+          'end_iso': e.end.toUtc().toIso8601String(),
+          'duration_seconds': e.durationSeconds,
+          'calories': e.calories,
+          'distance': e.distance,
+          'count': e.count,
+          'mean_hr': e.meanHeartRate,
+          'max_hr': e.maxHeartRate,
+          'min_hr': e.minHeartRate,
+          'mean_speed': e.meanSpeed,
+          'max_speed': e.maxSpeed,
+          'vo2max': e.vo2Max,
+          'raw_json': e.rawJson,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.delete('sh_exercise_samples',
+          where: 'uid = ?', whereArgs: [e.uid]);
+      await txn.delete('sh_exercise_route', where: 'uid = ?', whereArgs: [e.uid]);
+      final batch = txn.batch();
+      for (final s in e.samples) {
+        batch.insert('sh_exercise_samples', {
+          'uid': e.uid,
+          't_iso': s.t.toUtc().toIso8601String(),
+          'hr': s.hr,
+          'cadence': s.cadence,
+          'power': s.power,
+          'speed': s.speed,
+        });
+      }
+      for (final r in e.route) {
+        batch.insert('sh_exercise_route', {
+          'uid': e.uid,
+          't_iso': r.t.toUtc().toIso8601String(),
+          'lat': r.lat,
+          'lng': r.lng,
+          'alt': r.alt,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<void> upsertSamsungSleep(SamsungSleep s) async {
+    final db = await database;
+    final date = s.end.toLocal();
+    await db.transaction((txn) async {
+      await txn.insert(
+        'sh_sleep_sessions',
+        {
+          'uid': s.uid,
+          'date':
+              '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
+          'score': s.score,
+          'start_iso': s.start.toUtc().toIso8601String(),
+          'end_iso': s.end.toUtc().toIso8601String(),
+          'duration_seconds': s.durationSeconds,
+          'raw_json': s.rawJson,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.delete('sh_sleep_stages', where: 'uid = ?', whereArgs: [s.uid]);
+      final batch = txn.batch();
+      for (final st in s.stages) {
+        batch.insert('sh_sleep_stages', {
+          'uid': s.uid,
+          'stage': st.stage,
+          'start_iso': st.start.toUtc().toIso8601String(),
+          'end_iso': st.end.toUtc().toIso8601String(),
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  /// The watch exercise session linked to a logged workout (for the detail view).
+  Future<Map<String, dynamic>?> getSamsungExerciseForWorkout(
+      String workoutId) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT s.* FROM sh_exercise_sessions s
+      JOIN workout_logs w ON w.samsung_exercise_uid = s.uid
+      WHERE w.id = ? LIMIT 1
+    ''', [workoutId]);
+    return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<void> setWorkoutStartedAt(String workoutId, DateTime startedAt) async {
+    final db = await database;
+    await db.update('workout_logs',
+        {'started_at': startedAt.toUtc().toIso8601String()},
+        where: 'id = ?', whereArgs: [workoutId]);
+  }
+
+  /// Links logged workouts to overlapping watch sessions. Returns # newly linked.
+  Future<int> linkSamsungToWorkouts() async {
+    final db = await database;
+    final workouts = await db.query('workout_logs',
+        where:
+            "started_at IS NOT NULL AND (samsung_exercise_uid IS NULL OR samsung_exercise_uid = '')");
+    var linked = 0;
+    for (final w in workouts) {
+      final startedAt = DateTime.tryParse(w['started_at'] as String);
+      if (startedAt == null) continue;
+      final wStart = startedAt.toUtc();
+      final wEnd =
+          wStart.add(Duration(seconds: (w['duration_seconds'] as int?) ?? 0));
+      // Overlap: session.start <= workout.end AND session.end >= workout.start.
+      final ex = await db.rawQuery('''
+        SELECT uid FROM sh_exercise_sessions
+        WHERE start_iso <= ? AND end_iso >= ?
+        ORDER BY start_iso DESC LIMIT 1
+      ''', [wEnd.toIso8601String(), wStart.toIso8601String()]);
+      if (ex.isNotEmpty) {
+        await db.update(
+            'workout_logs', {'samsung_exercise_uid': ex.first['uid']},
+            where: 'id = ?', whereArgs: [w['id']]);
+        linked++;
+      }
+    }
+    return linked;
+  }
+
+  Future<String?> getSyncState(String key) async {
+    final db = await database;
+    final rows = await db.query('sh_sync_state',
+        where: 'key = ?', whereArgs: [key], limit: 1);
+    return rows.isEmpty ? null : rows.first['value'] as String?;
+  }
+
+  Future<void> setSyncState(String key, String value) async {
+    final db = await database;
+    await db.insert('sh_sync_state', {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   // ─── SUPPLEMENTS ────────────────────────────────────────────────────────────

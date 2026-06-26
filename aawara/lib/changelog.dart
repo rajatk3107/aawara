@@ -13,6 +13,15 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.4',
+    date: 'June 2026',
+    changes: [
+      'Connects to Samsung Health to pull watch workouts and sleep directly',
+      'Watch workouts auto-link to the gym workouts you log — see HR, calories and distance next to your sets & reps',
+      'Watch stats are included when you export a full backup'
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.3',
     date: 'June 2026',
     changes: [

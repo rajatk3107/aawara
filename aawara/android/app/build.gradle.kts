@@ -54,4 +54,8 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Samsung Health Data SDK (Samsung devices only; every call runtime-gated in
+    // Kotlin behind SDK_INT >= 29 + Samsung Health present).
+    implementation(files("libs/samsung-health-data-api-1.1.0.aar"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
