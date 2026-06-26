@@ -13,6 +13,14 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.3',
+    date: 'June 2026',
+    changes: [
+      'Rest timer now keeps running when you leave the workout screen and come back — it no longer disappears',
+      'Rest countdown stays accurate across app backgrounding (anchored to real time, not screen ticks)',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.2',
     date: 'June 2026',
     changes: [

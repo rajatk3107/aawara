@@ -72,3 +72,5 @@
 migrate_working_dir/
 
 /.claude
+/samsung-sdk
+/samsung-sdk/*

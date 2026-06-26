@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../database/workout_database.dart';
 import '../models/exercise.dart';
 import '../models/workout_log.dart';
+import '../utils/rest_timer.dart';
 import '../widgets/exercise_tile.dart';
 import '../widgets/muscle_group_filter.dart';
 import '../../utils/safe_navigation.dart';
@@ -57,6 +58,10 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
 
   // Rest timer
   Timer? _restTimer;
+  // Absolute wall-clock end time — the single source of truth for the rest
+  // countdown. Persisted to prefs so the rest survives a screen close/reopen or
+  // an app background (the in-memory Timer alone would be lost or drift).
+  DateTime? _restEndTime;
   int _restRemaining = 0;
   int _restTotal = 90;
   int _restDefault = 90; // loaded from prefs, user-configurable
@@ -80,6 +85,7 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       }
       _initTimer();
       _loadRestDefault();
+      _initRest();
     }
     _loadDetails();
   }
@@ -125,7 +131,11 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     SharedPreferences.getInstance().then((prefs) {
       prefs.remove('wl_start_${_log.id}');
       prefs.remove('wl_paused_elapsed_${_log.id}');
+      prefs.remove('wl_rest_end_${_log.id}');
+      prefs.remove('wl_rest_total_${_log.id}');
     });
+    // Finishing the workout cancels any still-pending rest alert.
+    NotificationService.instance.cancelRestEnd();
   }
 
   Future<void> _loadRestDefault() async {
@@ -145,8 +155,9 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     WidgetsBinding.instance.removeObserver(this);
     _durationTimer?.cancel();
     _restTimer?.cancel();
-    // Cancel a still-pending rest alert if the user leaves mid-rest.
-    if (_restRemaining > 0) NotificationService.instance.cancelRestEnd();
+    // Leave any in-progress rest persisted: its end time is in prefs and the OS
+    // alert is still scheduled, so reopening the screen restores the countdown
+    // and the user is still notified while away. (Skip/finish clears both.)
     _saveTimerState();
     for (final c in _noteControllers.values) {
       c.dispose();
@@ -278,8 +289,8 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
   // ─── Rest Timer ───────────────────────────────────────────────────────────────
 
   void _startRest(int seconds, {String? exerciseId, String? exerciseName}) {
-    _restTimer?.cancel();
     setState(() {
+      _restEndTime = DateTime.now().add(Duration(seconds: seconds));
       _restRemaining = seconds;
       _restTotal = seconds;
       _restDone = false;
@@ -293,14 +304,46 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     }
     NotificationService.instance
         .scheduleRestEnd(seconds: seconds, exerciseName: exerciseName);
+    _persistRest();
+    _runRestTicker();
+  }
+
+  // Restore an in-progress rest after the screen was closed/reopened (or the app
+  // was backgrounded). Remaining is recomputed from the persisted end time, so a
+  // rest that elapsed while away is simply cleared — its OS alert already fired.
+  Future<void> _initRest() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    final endMs = prefs.getInt('wl_rest_end_${_log.id}');
+    if (endMs == null) return;
+    final endTime = DateTime.fromMillisecondsSinceEpoch(endMs);
+    final remaining = restRemainingSeconds(endTime, DateTime.now());
+    if (remaining <= 0) {
+      await prefs.remove('wl_rest_end_${_log.id}');
+      await prefs.remove('wl_rest_total_${_log.id}');
+      return;
+    }
+    setState(() {
+      _restEndTime = endTime;
+      _restRemaining = remaining;
+      _restTotal = prefs.getInt('wl_rest_total_${_log.id}') ?? remaining;
+      _restDone = false;
+    });
+    _runRestTicker();
+  }
+
+  // The 1-second ticker. Derives remaining from the wall-clock [_restEndTime]
+  // each tick so it stays accurate regardless of how long the Timer was dormant.
+  void _runRestTicker() {
+    _restTimer?.cancel();
     _restTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
-      final next = _restRemaining - 1;
+      final remaining = restRemainingSeconds(_restEndTime, DateTime.now());
       setState(() {
-        _restRemaining = next < 0 ? 0 : next;
-        if (next <= 0) _restDone = true;
+        _restRemaining = remaining;
+        if (remaining <= 0) _restDone = true;
       });
-      if (next <= 0) {
+      if (remaining <= 0) {
         t.cancel();
         HapticFeedback.heavyImpact();
         Future.delayed(const Duration(milliseconds: 200), HapticFeedback.heavyImpact);
@@ -313,16 +356,33 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
     });
   }
 
+  // Persist the rest anchor so it survives a screen close/reopen. Clears the
+  // saved state when there is no active rest.
+  void _persistRest() {
+    final end = _restEndTime;
+    SharedPreferences.getInstance().then((prefs) {
+      if (end != null && _restRemaining > 0) {
+        prefs.setInt('wl_rest_end_${_log.id}', end.millisecondsSinceEpoch);
+        prefs.setInt('wl_rest_total_${_log.id}', _restTotal);
+      } else {
+        prefs.remove('wl_rest_end_${_log.id}');
+        prefs.remove('wl_rest_total_${_log.id}');
+      }
+    });
+  }
+
   // [clearNotification] is false only on natural completion (the alert has
   // already fired); true when the user skips/cancels rest early.
   void _cancelRest({bool clearNotification = true}) {
     _restTimer?.cancel();
     if (clearNotification) NotificationService.instance.cancelRestEnd();
     setState(() {
+      _restEndTime = null;
       _restRemaining = 0;
       _restDone = false;
       _restExpanded = false;
     });
+    _persistRest();
   }
 
   int _getRestSeconds(String exerciseId) =>
@@ -2191,17 +2251,27 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
                 children: [
                   _RestNudgeBtn(
                     label: '−15s',
-                    onTap: () => setState(() {
-                      _restRemaining = (_restRemaining - 15).clamp(5, 9999);
-                    }),
+                    onTap: () {
+                      setState(() {
+                        _restRemaining = (_restRemaining - 15).clamp(5, 9999);
+                        _restEndTime = DateTime.now()
+                            .add(Duration(seconds: _restRemaining));
+                      });
+                      _persistRest();
+                    },
                   ),
                   const SizedBox(width: 16),
                   _RestNudgeBtn(
                     label: '+15s',
-                    onTap: () => setState(() {
-                      _restRemaining += 15;
-                      _restTotal += 15;
-                    }),
+                    onTap: () {
+                      setState(() {
+                        _restRemaining += 15;
+                        _restTotal += 15;
+                        _restEndTime = DateTime.now()
+                            .add(Duration(seconds: _restRemaining));
+                      });
+                      _persistRest();
+                    },
                   ),
                 ],
               ),
