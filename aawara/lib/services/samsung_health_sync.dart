@@ -63,10 +63,22 @@ class SamsungHealthSync {
     for (final s in sleep) {
       await db.upsertSamsungSleep(s);
     }
+
+    // Backfill each session's dense HEART_RATE series over its own window. The
+    // in-session exercise log is unreliable for some workout types (e.g. weight
+    // machines came back empty), so the HR series is the source of truth for the
+    // chart + zones. Bounded: each session is pulled once (hr_series_checked).
+    var hrFilled = 0;
+    for (final s in await db.sessionsNeedingHrSeries()) {
+      final series = await svc.readVitalSeries('HEART_RATE', s.start, s.end);
+      await db.applyHrSeries(s.uid, [for (final e in series) (t: e.start, hr: e.v)]);
+      if (series.isNotEmpty) hrFilled++;
+    }
+
     final linked = await db.linkSamsungToWorkouts();
     await db.setSyncState('last_sync', now.toIso8601String());
     debugPrint(
-        '[samsung] synced ${exercises.length} workouts, ${sleep.length} nights, linked $linked');
+        '[samsung] synced ${exercises.length} workouts, ${sleep.length} nights, linked $linked, hr-series $hrFilled');
     return (exercises: exercises.length, sleep: sleep.length, linked: linked);
   }
 

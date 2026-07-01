@@ -1073,39 +1073,71 @@ class _WorkoutLoggingScreenState extends State<WorkoutLoggingScreen>
       body: Column(
         children: [
           _buildHeader(),
-          _buildProgress(checkedCount, totalSets, exWithSets, totalVol, progress),
-          WatchMetricsCard(workoutId: _log.id),
-          Expanded(
-            child: _log.exercises.isEmpty
-                ? _buildEmptyState()
-                : Column(
-                    children: [
-                      Expanded(
-                        child: ReorderableListView(
-                          onReorder: _log.completed ? (_, __) {} : _onReorder,
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-                          proxyDecorator: (child, idx, anim) => Material(
-                            color: Colors.transparent,
-                            child: child,
-                          ),
+          // Completed workouts scroll as one page (summary + watch HR carousel +
+          // exercise log). Active workouts keep the reorderable list.
+          if (_log.completed)
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    _buildProgress(checkedCount, totalSets, exWithSets,
+                        totalVol, progress),
+                    WatchMetricsCard(workoutId: _log.id),
+                    if (_log.exercises.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(40),
+                        child: _buildEmptyState(),
+                      )
+                    else
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        child: Column(
                           children: _log.exercises.asMap().entries.map((e) {
                             return _buildExerciseCard(e.value, e.key);
                           }).toList(),
                         ),
                       ),
-                      if (!_log.completed)
+                  ],
+                ),
+              ),
+            )
+          else ...[
+            _buildProgress(
+                checkedCount, totalSets, exWithSets, totalVol, progress),
+            WatchMetricsCard(workoutId: _log.id),
+            Expanded(
+              child: _log.exercises.isEmpty
+                  ? _buildEmptyState()
+                  : Column(
+                      children: [
+                        Expanded(
+                          child: ReorderableListView(
+                            onReorder: _onReorder,
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                            proxyDecorator: (child, idx, anim) => Material(
+                              color: Colors.transparent,
+                              child: child,
+                            ),
+                            children: _log.exercises.asMap().entries.map((e) {
+                              return _buildExerciseCard(e.value, e.key);
+                            }).toList(),
+                          ),
+                        ),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
                           child: TextButton.icon(
                             onPressed: _addExerciseToLog,
-                            icon: const Icon(Icons.add, color: Color(0xFF555577), size: 16),
+                            icon: const Icon(Icons.add,
+                                color: Color(0xFF555577), size: 16),
                             label: const Text('Add Exercise',
-                                style: TextStyle(color: Color(0xFF555577), fontSize: 13)),
+                                style: TextStyle(
+                                    color: Color(0xFF555577), fontSize: 13)),
                           ),
                         ),
-                    ],
-                  ),
-          ),
+                      ],
+                    ),
+            ),
+          ],
         ],
       ),
       bottomNavigationBar: SafeArea(

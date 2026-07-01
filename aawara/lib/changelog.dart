@@ -13,13 +13,30 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.7',
+    date: 'July 2026',
+    changes: [
+      'Workout Heart Rate card now shows a live HR line chart for the session (with your average marked)',
+      'Heart rate now pulls the watch’s full HR stream for each workout — so sessions that showed no HR before (e.g. weight machines) now have their chart and zones',
+    ],
+  ),
+  ChangelogEntry(
+    version: '1.1.6',
+    date: 'July 2026',
+    changes: [
+      'Workout view now shows every watch session for that workout (e.g. weights + treadmill) as a swipeable Heart Rate carousel',
+      'Completed workouts scroll as one page — the heart-rate section is no longer stuck above a separate scroll',
+      'Exports now list every watch session for a workout by name (weight machine, treadmill, …) with its heart-rate and calories',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.5',
     date: 'July 2026',
     changes: [
       'Completed workouts now show a Heart Rate card from your watch — average, max/min, and time in each zone (warm-up / fat-burn / cardio / peak)',
       'Past gym workouts link to the same-day watch session automatically',
       'Nothing changes on workouts without watch heart-rate data',
-      'Samsung Health now syncs incrementally — only new data since the last sync (faster, no repeated full pulls)',
+      'HR data now syncs incrementally — only new data since the last sync (faster, no repeated full pulls)',
       'Exports now include each workout’s watch heart-rate (avg/max, zones) and calories automatically — in CSV, JSON and the AI export',
     ],
   ),
