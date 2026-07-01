@@ -2974,7 +2974,7 @@ class WorkoutDatabase {
             if (zones != null) {
               String m(String k) => '${((zones[k] as int? ?? 0) / 60).round()}m';
               parts.add(
-                  'zones: peak ${m('peak')}, cardio ${m('cardio')}, fat-burn ${m('fat_burn')}, warm-up ${m('warm_up')}');
+                  'zones: z5 ${m('zone5')}, z4 ${m('zone4')}, z3 ${m('zone3')}, z2 ${m('zone2')}, z1 ${m('zone1')}');
             }
             sb.writeln('_Watch — ${watch['name']}: ${parts.join(' · ')}_');
           }
@@ -5036,10 +5036,11 @@ class WorkoutDatabase {
         if (ex['vo2max'] != null) 'vo2max': ex['vo2max'],
         if (z != null)
           'hr_zone_seconds': {
-            'warm_up': z.warmUpSeconds,
-            'fat_burn': z.fatBurnSeconds,
-            'cardio': z.cardioSeconds,
-            'peak': z.peakSeconds,
+            'zone1': z.zone1Seconds,
+            'zone2': z.zone2Seconds,
+            'zone3': z.zone3Seconds,
+            'zone4': z.zone4Seconds,
+            'zone5': z.zone5Seconds,
           },
       });
     }

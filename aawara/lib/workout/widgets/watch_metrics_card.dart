@@ -4,7 +4,7 @@ import '../database/workout_database.dart';
 import '../utils/heart_rate_zones.dart';
 import '../utils/sleep_series.dart';
 import '../utils/watch_hr_series.dart';
-import 'sleep_charts.dart';
+import 'workout_hr_chart.dart';
 
 /// Screen 3a: for a completed workout, show the watch (Samsung Health) sessions
 /// that belong to it — each as a Heart Rate card (avg/max/min + zone bar +
@@ -25,10 +25,11 @@ const _muted = Color(0xFF888899);
 const _red = Color(0xFFE74C3C);
 
 const _zoneColors = {
-  HrZone.warmUp: Color(0xFF3498DB),
-  HrZone.fatBurn: Color(0xFF2ECC71),
-  HrZone.cardio: Color(0xFFE67E22),
-  HrZone.peak: Color(0xFFE74C3C),
+  HrZone.zone1: Color(0xFF3498DB), // warm-up
+  HrZone.zone2: Color(0xFF2ECC71), // aerobic
+  HrZone.zone3: Color(0xFFF1C40F), // moderate
+  HrZone.zone4: Color(0xFFE67E22), // threshold
+  HrZone.zone5: Color(0xFFE74C3C), // max
 };
 
 class _WatchSession {
@@ -110,7 +111,7 @@ class _WatchMetricsCardState extends State<WatchMetricsCard> {
     final hasZones = _sessions.any((s) => s.hasZones);
     final hasChart = _sessions.any((s) => s.hasChart);
     final multi = _sessions.length > 1;
-    final height = (hasZones ? 452.0 : 272.0) + (hasChart ? 158.0 : 0.0);
+    final height = (hasZones ? 486.0 : 272.0) + (hasChart ? 158.0 : 0.0);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -237,20 +238,17 @@ class _WatchMetricsCardState extends State<WatchMetricsCard> {
           ),
           if (s.hasChart) ...[
             const SizedBox(height: 18),
-            SleepLineChart(
-              points: s.series,
-              color: _red,
-              average: s.avg > 0 ? s.avg : null,
-            ),
+            WorkoutHrChart(points: s.series, average: s.avg),
           ],
           if (z != null && z.totalSeconds > 0) ...[
             const SizedBox(height: 16),
             _zoneBar(z),
             const SizedBox(height: 14),
-            _zoneRow(HrZone.peak, 'Peak', '160+ bpm', z),
-            _zoneRow(HrZone.cardio, 'Cardio', '140–159 bpm', z),
-            _zoneRow(HrZone.fatBurn, 'Fat burn', '120–139 bpm', z),
-            _zoneRow(HrZone.warmUp, 'Warm up', '< 120 bpm', z),
+            _zoneRow(HrZone.zone5, 'Zone 5', 'Max · 171–190', z),
+            _zoneRow(HrZone.zone4, 'Zone 4', 'Threshold · 152–171', z),
+            _zoneRow(HrZone.zone3, 'Zone 3', 'Moderate · 133–152', z),
+            _zoneRow(HrZone.zone2, 'Zone 2', 'Aerobic · 114–133', z),
+            _zoneRow(HrZone.zone1, 'Zone 1', 'Warm-up · 95–114', z),
           ],
         ],
       ),
@@ -300,10 +298,11 @@ class _WatchMetricsCardState extends State<WatchMetricsCard> {
       child: SizedBox(
         height: 9,
         child: Row(children: [
-          seg(HrZone.warmUp),
-          seg(HrZone.fatBurn),
-          seg(HrZone.cardio),
-          seg(HrZone.peak),
+          seg(HrZone.zone1),
+          seg(HrZone.zone2),
+          seg(HrZone.zone3),
+          seg(HrZone.zone4),
+          seg(HrZone.zone5),
         ]),
       ),
     );

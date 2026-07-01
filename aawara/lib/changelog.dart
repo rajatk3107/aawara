@@ -13,6 +13,15 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.8',
+    date: 'July 2026',
+    changes: [
+      'Heart-rate zones now use the standard 5-zone model (Zone 1–5, 95–190 bpm) instead of warm-up/fat-burn/cardio/peak',
+      'HR chart redesigned: proper bpm axis, shaded fill, a marked peak, and a clearly-labelled average line',
+      'Fixed the HR chart’s time axis — it now shows your local workout time instead of UTC',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.7',
     date: 'July 2026',
     changes: [
