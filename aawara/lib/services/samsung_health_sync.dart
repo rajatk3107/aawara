@@ -20,7 +20,8 @@ class SyncResult {
 class SamsungHealthSync {
   SamsungHealthSync._();
 
-  static const _backfillDays = 30;
+  static const _backfillDays = 30; // one-time initial history
+  static const _lookbackDays = 2; // re-scan window to catch late/revised data
   static bool _running = false;
 
   /// Called on app open — syncs silently only when access is ALREADY granted
@@ -45,7 +46,14 @@ class SamsungHealthSync {
     final db = WorkoutDatabase.instance;
     final svc = SamsungHealthService.instance;
     final now = DateTime.now();
-    final from = now.subtract(const Duration(days: _backfillDays));
+
+    // Incremental: after the first backfill, only fetch data since the last
+    // sync (minus a small lookback so late-written / revised data isn't missed).
+    // Upserts are keyed by uid, so the overlap never duplicates.
+    final lastSync = DateTime.tryParse(await db.getSyncState('last_sync') ?? '');
+    final from = lastSync != null
+        ? lastSync.subtract(const Duration(days: _lookbackDays))
+        : now.subtract(const Duration(days: _backfillDays));
 
     final exercises = await svc.readExercises(from, now);
     for (final e in exercises) {

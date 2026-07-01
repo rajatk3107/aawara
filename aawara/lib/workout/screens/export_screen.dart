@@ -331,9 +331,19 @@ class _ExportScreenState extends State<ExportScreen> {
         }
       }
 
+      // Watch HR summary per workout — attached inline to both CSV & JSON.
+      final watchByWorkout = <String, Map<String, dynamic>>{};
+      if (selected.contains(_DataCategory.workouts)) {
+        for (final log in logs) {
+          final w = await _db.getWatchSummaryForWorkout(log.id);
+          if (w != null) watchByWorkout[log.id] = w;
+        }
+      }
+
       final content = _format == _Format.csv
-          ? _buildCsv(logs, exerciseMap)
-          : await _buildJson(logs, exerciseMap, selected, from, to);
+          ? _buildCsv(logs, exerciseMap, watchByWorkout)
+          : await _buildJson(
+              logs, exerciseMap, selected, from, to, watchByWorkout);
 
       final ext = _format == _Format.csv ? 'csv' : 'json';
       final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
@@ -581,11 +591,19 @@ class _ExportScreenState extends State<ExportScreen> {
 
   // ─── CSV builder ──────────────────────────────────────────────────────────
 
-  String _buildCsv(List<WorkoutLog> logs, Map<String, Exercise> exMap) {
+  String _buildCsv(List<WorkoutLog> logs, Map<String, Exercise> exMap,
+      Map<String, Map<String, dynamic>> watchByWorkout) {
     final sb = StringBuffer();
+    // Watch HR columns (workout-level, repeated per row) so the watch data is
+    // attached to the workout data automatically.
     sb.writeln(
-        'date,workout_name,completed,exercise_name,muscle_group,equipment,set_number,weight_kg,reps');
+        'date,workout_name,completed,exercise_name,muscle_group,equipment,set_number,weight_kg,reps,watch_hr_avg,watch_hr_max,watch_calories');
     for (final log in logs) {
+      final w = watchByWorkout[log.id];
+      final hrAvg = w?['hr_avg'] ?? '';
+      final hrMax = w?['hr_max'] ?? '';
+      final cal = w?['calories'] != null ? (w!['calories'] as num).round() : '';
+      final watchCols = ',$hrAvg,$hrMax,$cal';
       for (final exLog in log.exercises) {
         final ex = exMap[exLog.exerciseId];
         final exName = _csvEsc(ex?.name ?? exLog.exerciseId);
@@ -593,11 +611,11 @@ class _ExportScreenState extends State<ExportScreen> {
         final equip = ex?.equipment ?? '';
         if (exLog.sets.isEmpty) {
           sb.writeln(
-              '${log.date},${_csvEsc(log.workoutName)},${log.completed},$exName,$muscle,$equip,,,');
+              '${log.date},${_csvEsc(log.workoutName)},${log.completed},$exName,$muscle,$equip,,,$watchCols');
         } else {
           for (final s in exLog.sets) {
             sb.writeln(
-                '${log.date},${_csvEsc(log.workoutName)},${log.completed},$exName,$muscle,$equip,${s.setNumber},${s.weight ?? ''},${s.reps ?? ''}');
+                '${log.date},${_csvEsc(log.workoutName)},${log.completed},$exName,$muscle,$equip,${s.setNumber},${s.weight ?? ''},${s.reps ?? ''}$watchCols');
           }
         }
       }
@@ -620,6 +638,7 @@ class _ExportScreenState extends State<ExportScreen> {
     Set<_DataCategory> cats,
     String from,
     String to,
+    Map<String, Map<String, dynamic>> watchByWorkout,
   ) async {
     final db = await _db.database;
     bool has(c) => cats.contains(c);
@@ -708,6 +727,7 @@ class _ExportScreenState extends State<ExportScreen> {
           'completed': log.completed,
           if (log.durationSeconds != null) 'duration_seconds': log.durationSeconds,
           'total_volume_kg': log.totalVolume,
+          if (watchByWorkout[log.id] != null) 'watch': watchByWorkout[log.id],
           'exercises': log.exercises.map((exLog) {
             final ex = exMap[exLog.exerciseId];
             return {

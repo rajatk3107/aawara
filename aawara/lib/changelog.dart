@@ -13,6 +13,17 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.5',
+    date: 'July 2026',
+    changes: [
+      'Completed workouts now show a Heart Rate card from your watch — average, max/min, and time in each zone (warm-up / fat-burn / cardio / peak)',
+      'Past gym workouts link to the same-day watch session automatically',
+      'Nothing changes on workouts without watch heart-rate data',
+      'Samsung Health now syncs incrementally — only new data since the last sync (faster, no repeated full pulls)',
+      'Exports now include each workout’s watch heart-rate (avg/max, zones) and calories automatically — in CSV, JSON and the AI export',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.4',
     date: 'June 2026',
     changes: [

@@ -10,6 +10,8 @@ import '../models/supplement.dart';
 import '../models/sleep_session.dart';
 import '../models/lab_value.dart';
 import '../../services/samsung_health_models.dart';
+import '../utils/samsung_link.dart';
+import '../utils/heart_rate_zones.dart';
 import '../models/workout_log.dart';
 import '../models/workout_plan_day.dart';
 import '../../nutrition/models/nutrition_models.dart';
@@ -2946,6 +2948,26 @@ class WorkoutDatabase {
           final completed = (wRow['completed'] as int) == 1;
           sb.writeln('### ${wRow['date']} — ${wRow['workout_name']}$durationMin${completed ? '' : ' (incomplete)'}');
 
+          // Watch (Samsung Health) HR summary, attached to the workout.
+          final watch = await getWatchSummaryForWorkout(wId);
+          if (watch != null) {
+            final parts = <String>[
+              if (watch['hr_avg'] != null) 'avg ${watch['hr_avg']} bpm',
+              if (watch['hr_max'] != null) 'max ${watch['hr_max']}',
+              if (watch['calories'] != null)
+                '${(watch['calories'] as num).round()} kcal',
+            ];
+            final zones = watch['hr_zone_seconds'] as Map?;
+            if (zones != null) {
+              String m(String k) => '${((zones[k] as int? ?? 0) / 60).round()}m';
+              parts.add(
+                  'zones: peak ${m('peak')}, cardio ${m('cardio')}, fat-burn ${m('fat_burn')}, warm-up ${m('warm_up')}');
+            }
+            if (parts.isNotEmpty) {
+              sb.writeln('_Watch: ${parts.join(' · ')}_');
+            }
+          }
+
           final exLogs = await db.query('exercise_logs',
               where: 'workout_log_id = ?', whereArgs: [wId], orderBy: 'order_index ASC');
           for (final exRow in exLogs) {
@@ -4870,6 +4892,52 @@ class WorkoutDatabase {
     return rows.isEmpty ? null : Map<String, dynamic>.from(rows.first);
   }
 
+  /// HR samples (t, hr) for a watch session, ordered by time.
+  Future<List<({DateTime t, double hr})>> getSamsungExerciseSamples(
+      String uid) async {
+    final db = await database;
+    final rows = await db.query('sh_exercise_samples',
+        columns: ['t_iso', 'hr'],
+        where: 'uid = ? AND hr IS NOT NULL',
+        whereArgs: [uid],
+        orderBy: 't_iso ASC');
+    return [
+      for (final r in rows)
+        (t: DateTime.parse(r['t_iso'] as String), hr: (r['hr'] as num).toDouble())
+    ];
+  }
+
+  /// Compact watch summary for a logged workout (or null if none linked) —
+  /// exported inline with the workout so HR travels with the workout data.
+  Future<Map<String, dynamic>?> getWatchSummaryForWorkout(
+      String workoutId) async {
+    final ex = await getSamsungExerciseForWorkout(workoutId);
+    if (ex == null) return null;
+    final samples = await getSamsungExerciseSamples(ex['uid'] as String);
+    final z = samples.isEmpty
+        ? null
+        : heartRateZones([for (final s in samples) HrSample(s.t, s.hr)]);
+    return {
+      'source': 'samsung_health',
+      if (ex['exercise_type'] != null) 'exercise_type': ex['exercise_type'],
+      if (ex['duration_seconds'] != null)
+        'duration_seconds': ex['duration_seconds'],
+      if (ex['calories'] != null) 'calories': ex['calories'],
+      if (ex['distance'] != null) 'distance_m': ex['distance'],
+      if (ex['mean_hr'] != null) 'hr_avg': (ex['mean_hr'] as num).round(),
+      if (ex['max_hr'] != null) 'hr_max': (ex['max_hr'] as num).round(),
+      if (ex['min_hr'] != null) 'hr_min': (ex['min_hr'] as num).round(),
+      if (ex['vo2max'] != null) 'vo2max': ex['vo2max'],
+      if (z != null)
+        'hr_zone_seconds': {
+          'warm_up': z.warmUpSeconds,
+          'fat_burn': z.fatBurnSeconds,
+          'cardio': z.cardioSeconds,
+          'peak': z.peakSeconds,
+        },
+    };
+  }
+
   Future<void> setWorkoutStartedAt(String workoutId, DateTime startedAt) async {
     final db = await database;
     await db.update('workout_logs',
@@ -4902,6 +4970,46 @@ class WorkoutDatabase {
             where: 'id = ?', whereArgs: [w['id']]);
         linked++;
       }
+    }
+
+    // Fallback for workouts WITHOUT a start time (history): same calendar day,
+    // and only when there's exactly one gym-type watch session that day (never
+    // an evening walk, never a guess between two candidates).
+    final undated = await db.query('workout_logs',
+        columns: ['id', 'date'],
+        where:
+            "started_at IS NULL AND (samsung_exercise_uid IS NULL OR samsung_exercise_uid = '')");
+    if (undated.isNotEmpty) {
+      final sessions = await db.query('sh_exercise_sessions',
+          columns: ['uid', 'exercise_type', 'start_iso']);
+      // Group gym-type sessions by their local date.
+      final byDate = <String, List<String>>{};
+      final typeCounts = <String, int>{};
+      for (final s in sessions) {
+        final type = (s['exercise_type'] as String?) ?? 'null';
+        typeCounts[type] = (typeCounts[type] ?? 0) + 1;
+        if (!isGymType(s['exercise_type'] as String?)) continue;
+        final start = DateTime.parse(s['start_iso'] as String).toLocal();
+        final d =
+            '${start.year}-${start.month.toString().padLeft(2, '0')}-${start.day.toString().padLeft(2, '0')}';
+        (byDate[d] ??= []).add(s['uid'] as String);
+      }
+      for (final w in undated) {
+        final wd = (w['date'] as String);
+        final key = wd.length >= 10 ? wd.substring(0, 10) : wd; // YYYY-MM-DD
+        final candidates = byDate[key];
+        if (candidates != null && candidates.length == 1) {
+          await db.update(
+              'workout_logs', {'samsung_exercise_uid': candidates.first},
+              where: 'id = ?', whereArgs: [w['id']]);
+          linked++;
+        }
+      }
+      final singleDays = byDate.values.where((v) => v.length == 1).length;
+      // ignore: avoid_print
+      print('[samsung-link] undated=${undated.length} '
+          'gymDays=${byDate.length} singleGymDays=$singleDays '
+          'types=$typeCounts');
     }
     return linked;
   }
