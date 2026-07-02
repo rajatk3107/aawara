@@ -5022,6 +5022,14 @@ class WorkoutDatabase {
       final z = samples.isEmpty
           ? null
           : heartRateZones([for (final s in samples) HrSample(s.t, s.hr)]);
+      // Prefer Samsung's session aggregate; fall back to the value derived from
+      // the HR samples (so sessions without an aggregate — e.g. weight machines
+      // — still export the avg/max the on-screen card shows).
+      int? hr(num? agg, double? fromSamples) => agg?.round() ??
+          (fromSamples != null && fromSamples > 0 ? fromSamples.round() : null);
+      final hrAvg = hr(ex['mean_hr'] as num?, z?.avg);
+      final hrMax = hr(ex['max_hr'] as num?, z?.max);
+      final hrMin = hr(ex['min_hr'] as num?, z?.min);
       out.add({
         'source': 'samsung_health',
         'name': _watchSessionName(ex),
@@ -5030,9 +5038,9 @@ class WorkoutDatabase {
           'duration_seconds': ex['duration_seconds'],
         if (ex['calories'] != null) 'calories': ex['calories'],
         if (ex['distance'] != null) 'distance_m': ex['distance'],
-        if (ex['mean_hr'] != null) 'hr_avg': (ex['mean_hr'] as num).round(),
-        if (ex['max_hr'] != null) 'hr_max': (ex['max_hr'] as num).round(),
-        if (ex['min_hr'] != null) 'hr_min': (ex['min_hr'] as num).round(),
+        if (hrAvg != null) 'hr_avg': hrAvg,
+        if (hrMax != null) 'hr_max': hrMax,
+        if (hrMin != null) 'hr_min': hrMin,
         if (ex['vo2max'] != null) 'vo2max': ex['vo2max'],
         if (z != null)
           'hr_zone_seconds': {

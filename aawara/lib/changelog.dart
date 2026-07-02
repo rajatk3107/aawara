@@ -13,6 +13,13 @@ class ChangelogEntry {
 
 const List<ChangelogEntry> kChangelog = [
   ChangelogEntry(
+    version: '1.1.9',
+    date: 'July 2026',
+    changes: [
+      'Exports now include the watch heart rate (avg/max/min) for every session, even ones Samsung didn’t store a summary for (e.g. weight machines) — matching what the workout screen shows',
+    ],
+  ),
+  ChangelogEntry(
     version: '1.1.8',
     date: 'July 2026',
     changes: [
